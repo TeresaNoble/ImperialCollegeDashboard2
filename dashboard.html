@@ -30,6 +30,7 @@
     .altmetric-canvas { max-height: 280px; }
     .high-attention-list a { color: #007bff; text-decoration: none; margin-right: 10px; }
     .high-attention-list a:hover { text-decoration: underline; }
+    .filter-note { display: inline-block; margin-left: 8px; font-size: 0.9rem; color: #475569; }
   </style>
 </head>
 <body>
@@ -183,6 +184,28 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!departments.length) return null;
     const clauses = departments.map(name => `research_orgs.name = "${name.replace(/"/g, '\\"')}"`);
     return `(${clauses.join(' or ')})`;
+  }
+
+  async function fetchImperialPublications(term, period, orgIdOverride = null, conceptId = null) {
+    const year = new Date().getFullYear();
+    const filters = [];
+    if (period === "1") filters.push(`year >= ${year - 1}`);
+    if (period === "5") filters.push(`year >= ${year - 5}`);
+
+    const orgId = orgIdOverride || "grid.4991.5";
+    const orgName = "Imperial College London";
+    filters.push(`(research_orgs.id = "${orgId}" or research_orgs.name = "${orgName}")`);
+    if (conceptId) filters.push(`concepts.id = "${conceptId}"`);
+
+    const query = `
+      search publications for "${term}"${buildWhereClause(filters)}
+      return publications[title + year + research_orgs]
+      limit 1000
+    `;
+    const r = await callDSL(query);
+    let pubs = r.publications || r || [];
+    if (!Array.isArray(pubs)) pubs = [];
+    return pubs;
   }
 
   function aggregateDepartmentData(publications) {
@@ -412,8 +435,14 @@ document.addEventListener("DOMContentLoaded", () => {
     renderSummaryTable(currentSchoolFilter);
 
     const narrativeLabel = currentSchoolFilter === SCHOOL_ALL ? 'Imperial' : currentSchoolFilter;
-    document.getElementById("trend-narrative").innerText =
-      `${narrativeLabel} publication activity compared to global research on "${lastSearchContext.term}".`;
+    const narrativeEl = document.getElementById("trend-narrative");
+    const baseNarrative = window.baseTrendNarrative || narrativeEl.innerHTML || narrativeEl.innerText || '';
+    if (narrativeLabel === 'Imperial') {
+      narrativeEl.innerHTML = baseNarrative;
+    } else {
+      const note = `<span class="filter-note">Viewing ${narrativeLabel} convergence school activity.</span>`;
+      narrativeEl.innerHTML = baseNarrative ? `${baseNarrative} ${note}` : note;
+    }
   }
 
 
@@ -874,16 +903,18 @@ async function getImperialCounts(term, period, orgIdOverride = null, conceptId =
     document.body.insertAdjacentHTML("beforeend","<p id='loading'>Loading data from Dimensions...</p>");
 
     const orgId = await getImperialId();
-    const resolvedOrgId = orgId;
-    const imperialOrgFilter = `(research_orgs.id = "${orgId}" or research_orgs.name = "Imperial College London")`;
-    const [globalAgg, imperialAgg, topGlobal, topImperial] = await Promise.all([
+    const resolvedOrgId = orgId || "grid.4991.5";
+    const imperialOrgFilter = `(research_orgs.id = "${resolvedOrgId}" or research_orgs.name = "Imperial College London")`;
+    const [globalAgg, imperialAgg, topGlobal, topImperial, imperialPublications] = await Promise.all([
       getGlobalCounts(term, period),
-      getImperialCounts(term, period, orgId),
+      getImperialCounts(term, period, resolvedOrgId),
       getTopPapers(term, period, [], 5),
-      getTopPapers(term, period, [imperialOrgFilter], 5)
+      getTopPapers(term, period, [imperialOrgFilter], 5),
+      fetchImperialPublications(term, period, resolvedOrgId)
     ]);
 
-    document.getElementById("loading").remove();
+    const loadingEl = document.getElementById("loading");
+    if (loadingEl) loadingEl.remove();
     document.getElementById("dashboard-content").style.display = "block";
 
     const years = [...new Set([...globalAgg, ...imperialAgg].map(d => d.year))]
@@ -960,7 +991,9 @@ async function getImperialCounts(term, period, orgIdOverride = null, conceptId =
     }
 
     const narrativeEl = document.getElementById("trend-narrative");
-    narrativeEl.innerHTML = narrativeBits.join(" ");
+    const narrativeHtml = narrativeBits.join(" ");
+    narrativeEl.innerHTML = narrativeHtml;
+    window.baseTrendNarrative = narrativeHtml;
 
     const highAttentionContainer = document.getElementById("altmetric-high-attention");
     highAttentionContainer.innerHTML = highAttentionLinks.length ? highAttentionLinks.join(" • ") : "No high-attention highlights yet.";
@@ -1016,6 +1049,27 @@ async function getImperialCounts(term, period, orgIdOverride = null, conceptId =
     themeDiv.html("");
     topics.forEach(t => themeDiv.append("span").attr("class","tag").text(t)
       .on("click", ()=> showTheme(t, period, resolvedOrgId)));
+
+    const affiliationData = aggregateDepartmentData(imperialPublications);
+    const combinedYears = Array.from(new Set([
+      ...years,
+      ...(affiliationData.years || [])
+    ])).sort((a, b) => a - b);
+
+    lastSearchContext = {
+      term,
+      period,
+      orgId: resolvedOrgId,
+      years: combinedYears,
+      globalAgg,
+      imperialAgg,
+      schoolYearCounts: affiliationData.schoolYearCounts || {},
+      deptYearCounts: affiliationData.deptYearCounts || {}
+    };
+    lastImperialOrgId = resolvedOrgId;
+    currentSchoolFilter = SCHOOL_ALL;
+    populateSchoolFilter(lastSearchContext.schoolYearCounts);
+    applySchoolFilter();
   };
 
   async function showTheme(theme, period, orgId) {
