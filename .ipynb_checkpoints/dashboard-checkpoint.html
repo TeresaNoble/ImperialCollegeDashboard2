@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Imperial College Research Dashboard (Live Dimensions Data)</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="school_mapping.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f9fafc; }
+    h1 { color: #003366; }
+    .card { background: #fff; padding: 15px; margin: 10px 0; border-radius: 6px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .flex { display: flex; gap: 20px; flex-wrap: wrap; }
+    .metric-grid { display: flex; gap: 15px; flex-wrap: wrap; margin-top: 15px; }
+    .metric { flex: 1; min-width: 180px; background: #eef4ff; border-radius: 6px; padding: 10px; }
+    .metric h4 { margin: 0 0 5px; font-size: 0.95rem; color: #003366; }
+    .metric p { margin: 0; font-size: 1.1rem; font-weight: bold; color: #1a365d; }
+    .tag { background: #007bff; color: white; padding: 5px 10px; margin: 3px;
+           border-radius: 4px; cursor: pointer; display: inline-block; }
+    .tag:hover { background: #0056b3; }
+    input, select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    input { width: 250px; }
+    button { padding: 8px 12px; border: none; background: #007bff; color: white; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #0056b3; }
+    #theme-modal { display:none; position:fixed; top:5%; left:10%; width:80%; height:85%;
+                   background:white; border:1px solid #ccc; overflow:auto; padding:20px; z-index:1000; }
+    #theme-modal h2 { margin-top:0; }
+    #close-modal { float:right; cursor:pointer; color:red; font-weight:bold; }
+    .altmetric-canvas { max-height: 280px; }
+    .high-attention-list a { color: #007bff; text-decoration: none; margin-right: 10px; }
+    .high-attention-list a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <h1>🌍 Imperial College Research Dashboard (Live from Dimensions)</h1>
+  <p>Explore global research topics and Imperial’s contributions — using live Dimensions data.</p>
+
+  <div class="card">
+    <input type="text" id="search-term" placeholder="Enter keyword (e.g. wildfire, malaria)">
+    <select id="period-select">
+      <option value="all">All years</option>
+      <option value="1">Last 1 year</option>
+      <option value="5">Last 5 years</option>
+    </select>
+    <button id="search-btn">Search</button>
+  </div>
+
+  <div id="dashboard-content" style="display:none;">
+    <div class="flex">
+      <div class="card" style="flex:1">
+        <h2>🌐 Global Publications</h2>
+        <p id="global-count"></p>
+        <p><strong>Hot topics:</strong> <span id="global-topics"></span></p>
+      </div>
+      <div class="card" style="flex:1">
+        <h2>🎓 Imperial Publications</h2>
+        <p id="imperial-count"></p>
+        <p><strong>Imperial themes:</strong> <span id="imperial-themes"></span></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="chart-header">
+        <h2>📈 Publications Trend</h2>
+        <div class="filter-select">
+          <label for="school-filter">Convergence school:</label>
+          <select id="school-filter"></select>
+        </div>
+      </div>
+      <canvas id="combinedChart"></canvas>
+      <p id="trend-narrative" class="narrative"></p>
+    </div>
+
+    <div class="card">
+      <h2>🏛️ School Activity Over Time</h2>
+      <canvas id="schoolStackedChart"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>⭐ Leading Labs & Growth</h2>
+      <div id="school-summary"></div>
+    </div>
+
+    <div class="card">
+      <h2>🎯 Altmetric Attention</h2>
+      <div class="flex">
+        <div style="flex:1; min-width:260px;">
+          <canvas id="altmetricTrendChart" class="altmetric-canvas"></canvas>
+        </div>
+        <div style="flex:1; min-width:260px;">
+          <canvas id="altmetricBreakdownChart" class="altmetric-canvas"></canvas>
+        </div>
+      </div>
+      <div class="metric-grid">
+        <div class="metric">
+          <h4>Top Tweets</h4>
+          <p id="altmetric-top-tweets">-</p>
+        </div>
+        <div class="metric">
+          <h4>Policy Mentions</h4>
+          <p id="altmetric-policy-mentions">-</p>
+        </div>
+        <div class="metric">
+          <h4>Leading Outlet</h4>
+          <p id="altmetric-top-outlet">-</p>
+        </div>
+      </div>
+      <p><strong>High-attention papers:</strong> <span id="altmetric-high-attention" class="high-attention-list">No highlights yet.</span></p>
+    </div>
+
+    <div class="card">
+      <h2>🔥 Research Themes</h2>
+      <div id="theme-tags"></div>
+    </div>
+
+    <div class="card">
+      <h2>📄 Top Papers</h2>
+      <h3>🌐 Global Top Papers</h3>
+      <div id="top-papers-global"></div>
+      <h3>🎓 Imperial Top Papers</h3>
+      <div id="top-papers-imperial"></div>
+    </div>
+
+    <div class="card">
+      <h2>🚀 Opportunities for Imperial</h2>
+      <div id="imperial-opportunities" class="narrative status-message">Run a search to see AI-generated opportunity signals.</div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="theme-modal">
+    <span id="close-modal">✖</span>
+    <h2 id="theme-title"></h2>
+    <p id="theme-summary" class="narrative"></p>
+    <canvas id="theme-trend"></canvas>
+    <div id="theme-papers"></div>
+  </div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+
+  const SCHOOL_ALL = "All Schools";
+  const knownSchoolMapping = window.convergenceSchoolMapping || {};
+  const colorPalette = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
+  ];
+  const OTHER_SCHOOL = "Unmapped Units";
+  let lastSearchContext = {
+    term: "",
+    period: "",
+    orgId: null,
+    years: [],
+    globalAgg: [],
+    imperialAgg: [],
+    schoolYearCounts: {},
+    deptYearCounts: {}
+  };
+  let currentSchoolFilter = SCHOOL_ALL;
+  let lastImperialOrgId = null;
+
+  function hexToRgba(hex, alpha = 1) {
+    const sanitized = hex.replace('#', '');
+    const bigint = parseInt(sanitized, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function safeValue(v, fallback="N/A") {
+    return (v !== null && v !== undefined && v !== "NaN") ? v : fallback;
+  }
+
+  function buildSchoolFilterClause(school) {
+    if (!school || school === SCHOOL_ALL) return null;
+    const departments = Object.entries(knownSchoolMapping)
+      .filter(([, mappedSchool]) => mappedSchool === school)
+      .map(([deptName]) => deptName)
+      .sort();
+    if (!departments.length) return null;
+    const clauses = departments.map(name => `research_orgs.name = "${name.replace(/"/g, '\\"')}"`);
+    return `(${clauses.join(' or ')})`;
+  }
+
+  function aggregateDepartmentData(publications) {
+    const yearsSet = new Set();
+    const schoolYearCounts = {};
+    const deptYearCounts = {};
+
+    publications.forEach(pub => {
+      if (!pub || !pub.year) return;
+      yearsSet.add(pub.year);
+      const seenDeptYear = new Set();
+      (pub.research_orgs || []).forEach(org => {
+        const name = typeof org === 'string' ? org : org?.name;
+        if (!name || !knownSchoolMapping[name]) return;
+        const dedupeKey = `${name}-${pub.year}`;
+        if (seenDeptYear.has(dedupeKey)) return;
+        seenDeptYear.add(dedupeKey);
+
+        const school = knownSchoolMapping[name];
+        schoolYearCounts[school] = schoolYearCounts[school] || {};
+        schoolYearCounts[school][pub.year] = (schoolYearCounts[school][pub.year] || 0) + 1;
+
+        if (!deptYearCounts[name]) {
+          deptYearCounts[name] = { school, counts: {} };
+        }
+        deptYearCounts[name].counts[pub.year] = (deptYearCounts[name].counts[pub.year] || 0) + 1;
+      });
+    });
+
+    return {
+      years: Array.from(yearsSet).sort((a, b) => a - b),
+      schoolYearCounts,
+      deptYearCounts
+    };
+  }
+
+  function populateSchoolFilter(schoolYearCounts) {
+    const select = document.getElementById("school-filter");
+    if (!select) return;
+    const schools = Object.keys(schoolYearCounts || {}).sort();
+    select.innerHTML = "";
+
+    const allOption = document.createElement("option");
+    allOption.value = SCHOOL_ALL;
+    allOption.textContent = SCHOOL_ALL;
+    select.appendChild(allOption);
+
+    schools.forEach(school => {
+      const option = document.createElement("option");
+      option.value = school;
+      option.textContent = school;
+      select.appendChild(option);
+    });
+
+    select.value = currentSchoolFilter;
+    select.onchange = () => {
+      currentSchoolFilter = select.value;
+      applySchoolFilter();
+    };
+  }
+
+  function updateMetricSummaries(imperialSeries, globalSeries) {
+    const totalImperial = d3.sum(imperialSeries);
+    const totalGlobal = d3.sum(globalSeries);
+    const pct = totalGlobal ? ((totalImperial / totalGlobal) * 100).toFixed(1) : 0;
+    const label = currentSchoolFilter === SCHOOL_ALL ? "Imperial" : currentSchoolFilter;
+
+    document.getElementById("global-count").innerText = `${totalGlobal} publications`;
+    document.getElementById("imperial-count").innerText = `${totalImperial} publications (${pct}% of global) - ${label}`;
+  }
+
+  function updateStackedChart() {
+    const ctx = document.getElementById('schoolStackedChart').getContext('2d');
+    const years = lastSearchContext.years;
+    const schoolYearCounts = lastSearchContext.schoolYearCounts || {};
+    const datasets = Object.entries(schoolYearCounts)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([school, counts], idx) => {
+        const highlight = currentSchoolFilter === SCHOOL_ALL || currentSchoolFilter === school;
+        const alpha = highlight ? 0.8 : 0.2;
+        return {
+          label: school,
+          data: years.map(y => counts[y] || 0),
+          backgroundColor: hexToRgba(colorPalette[idx % colorPalette.length], alpha),
+          borderColor: hexToRgba(colorPalette[idx % colorPalette.length], 1),
+          borderWidth: highlight ? 1.5 : 0.5,
+          stack: 'schools'
+        };
+      });
+
+    if (!window.schoolStackedChart) {
+      window.schoolStackedChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: years,
+          datasets: datasets
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: { stacked: true },
+            y: { stacked: true, beginAtZero: true }
+          },
+          plugins: {
+            legend: { position: 'bottom' }
+          }
+        }
+      });
+    } else {
+      window.schoolStackedChart.data.labels = years;
+      window.schoolStackedChart.data.datasets = datasets;
+      window.schoolStackedChart.update();
+    }
+  }
+
+  function renderSummaryTable(selectedSchool) {
+    const container = document.getElementById("school-summary");
+    if (!container) return;
+    const years = lastSearchContext.years;
+    const deptEntries = Object.entries(lastSearchContext.deptYearCounts || {}).filter(([, info]) =>
+      !selectedSchool || selectedSchool === SCHOOL_ALL || info.school === selectedSchool
+    );
+
+    if (!deptEntries.length) {
+      container.innerHTML = "<p>No departmental activity recorded for this selection.</p>";
+      return;
+    }
+
+    const latestYear = years[years.length - 1];
+    const rows = deptEntries.map(([dept, info]) => {
+      const totals = years.map(y => info.counts[y] || 0);
+      const total = d3.sum(totals);
+      const startYear = years[0];
+      const startVal = info.counts[startYear] || 0;
+      const endVal = info.counts[latestYear] || 0;
+      let growth;
+      if (startVal === 0) {
+        growth = endVal > 0 ? "New activity" : "0%";
+      } else {
+        const pct = ((endVal - startVal) / startVal) * 100;
+        growth = `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+      }
+      return {
+        dept,
+        school: info.school,
+        total,
+        latest: endVal,
+        growth
+      };
+    }).filter(row => row.total > 0);
+
+    rows.sort((a, b) => b.total - a.total);
+    const topRows = rows.slice(0, 5);
+
+    const schoolLabel = selectedSchool === SCHOOL_ALL ? "All schools" : selectedSchool;
+    container.innerHTML = `
+      <p><span class="badge">${schoolLabel}</span> Top labs by output (${years[0]}–${latestYear}).</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Department / Unit</th>
+            <th>Convergence School</th>
+            <th>Total Publications</th>
+            <th>Latest Year (${latestYear})</th>
+            <th>Growth vs ${years[0]}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${topRows.map(row => `
+            <tr>
+              <td>${row.dept}</td>
+              <td>${row.school}</td>
+              <td>${row.total}</td>
+              <td>${row.latest}</td>
+              <td>${row.growth}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function applySchoolFilter() {
+    if (!lastSearchContext.years.length) {
+      const derivedYears = [...new Set([
+        ...lastSearchContext.globalAgg.map(d => d.year),
+        ...lastSearchContext.imperialAgg.map(d => d.year)
+      ].filter(Boolean))].sort((a, b) => a - b);
+      lastSearchContext.years = derivedYears;
+    }
+
+    const years = lastSearchContext.years;
+    if (!years.length) return;
+    const globalSeries = years.map(y => (lastSearchContext.globalAgg.find(d => d.year === y)?.count) || 0);
+
+    let imperialSeries;
+    if (currentSchoolFilter === SCHOOL_ALL) {
+      imperialSeries = years.map(y => (lastSearchContext.imperialAgg.find(d => d.year === y)?.count) || 0);
+    } else {
+      const schoolCounts = lastSearchContext.schoolYearCounts[currentSchoolFilter] || {};
+      imperialSeries = years.map(y => schoolCounts[y] || 0);
+    }
+
+    if (!window.mainTrendChart) {
+      const combinedCtx = document.getElementById('combinedChart').getContext('2d');
+      window.mainTrendChart = new Chart(combinedCtx, {
+        type: 'line',
+        data: {
+          labels: years,
+          datasets: [
+            { label: 'Global Publications', data: globalSeries, borderColor: 'blue', fill: false },
+            { label: 'Imperial Publications', data: imperialSeries, borderColor: 'green', fill: false }
+          ]
+        },
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+      });
+    } else {
+      window.mainTrendChart.data.labels = years;
+      window.mainTrendChart.data.datasets[0].data = globalSeries;
+      window.mainTrendChart.data.datasets[1].data = imperialSeries;
+      window.mainTrendChart.data.datasets[1].label = currentSchoolFilter === SCHOOL_ALL ? 'Imperial Publications' : `${currentSchoolFilter} Publications`;
+      window.mainTrendChart.update();
+    }
+
+    updateMetricSummaries(imperialSeries, globalSeries);
+    updateStackedChart();
+    renderSummaryTable(currentSchoolFilter);
+
+    const narrativeLabel = currentSchoolFilter === SCHOOL_ALL ? 'Imperial' : currentSchoolFilter;
+    document.getElementById("trend-narrative").innerText =
+      `${narrativeLabel} publication activity compared to global research on "${lastSearchContext.term}".`;
+  }
+
+
+  function buildWhereClause(filters = []) {
+    const clauses = filters.filter(Boolean);
+    return clauses.length ? ` where ${clauses.join(" and ")}` : "";
+  }
+
+  function getAltmetricScore(paper) {
+    if (!paper) return 0;
+    const alt = paper.altmetric;
+    if (typeof alt === "number") return alt;
+    if (alt && typeof alt === "object") {
+      const candidates = [alt.score, alt.attention_score, alt.altmetric_score, alt.value];
+      for (const c of candidates) {
+        if (typeof c === "number" && !Number.isNaN(c)) return c;
+      }
+    }
+    return 0;
+  }
+
+  function normalizeAltmetricDetails(paper) {
+    if (paper?.altmetric_details && typeof paper.altmetric_details === "object") {
+      return paper.altmetric_details;
+    }
+    if (paper?.altmetric && typeof paper.altmetric === "object" && paper.altmetric.details) {
+      return paper.altmetric.details;
+    }
+    return {};
+  }
+
+  function getDetailValue(details, keys = []) {
+    for (const key of keys) {
+      const value = details?.[key];
+      if (typeof value === "number" && !Number.isNaN(value)) return value;
+    }
+    return null;
+  }
+
+  function formatChannelName(raw) {
+    if (!raw) return "Other";
+    const cleaned = raw
+      .replace(/^cited_by_/, "")
+      .replace(/_count$/, "")
+      .replace(/_/g, " ");
+    return cleaned.split(" ").map(w => w ? w[0].toUpperCase() + w.slice(1) : "").join(" ");
+  }
+
+  function parseDateKey(label) {
+    if (!label) return Date.now();
+    const parsed = Date.parse(label);
+    if (!Number.isNaN(parsed)) return parsed;
+    const yearMatch = label.match(/\d{4}/);
+    if (yearMatch) return Date.parse(`${yearMatch[0]}-01-01`);
+    return Date.now();
+  }
+
+  function formatTimelineLabel(label) {
+    if (!label) return "recent periods";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(label)) {
+      const d = new Date(label);
+      if (!Number.isNaN(d)) {
+        return d.toLocaleString(undefined, { month: "short", year: "numeric" });
+      }
+    }
+    if (/^\d{4}-\d{2}$/.test(label)) {
+      const parts = label.split("-");
+      const d = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+      if (!Number.isNaN(d)) {
+        return d.toLocaleString(undefined, { month: "short", year: "numeric" });
+      }
+    }
+    if (/^\d{4}$/.test(label)) return label;
+    return label;
+  }
+
+  function collectTimelineFromDetails(details, timelineMap, defaultScore = 0) {
+    if (!details || typeof details !== "object") return;
+    const pushPoint = (label, value) => {
+      if (!label) return;
+      const numeric = typeof value === "number" && !Number.isNaN(value) ? value : defaultScore;
+      if (!numeric) return;
+      timelineMap.set(label, (timelineMap.get(label) || 0) + numeric);
+    };
+
+    const candidateFields = ["attention_over_time", "timeline", "time_series", "histogram", "history"];
+    candidateFields.forEach(field => {
+      const value = details[field];
+      if (!value) return;
+      if (Array.isArray(value)) {
+        value.forEach(point => {
+          if (!point || typeof point !== "object") return;
+          const label = point.date || point.period || point.label;
+          const numeric = typeof point.score === "number" ? point.score : (typeof point.value === "number" ? point.value : null);
+          pushPoint(label, numeric);
+        });
+      } else if (typeof value === "object") {
+        Object.entries(value).forEach(([label, val]) => {
+          if (typeof val === "number") {
+            pushPoint(label, val);
+          } else if (val && typeof val === "object") {
+            const numeric = typeof val.score === "number" ? val.score : (typeof val.value === "number" ? val.value : null);
+            pushPoint(label, numeric);
+          }
+        });
+      }
+    });
+  }
+
+  function accumulateChannelCounts(details, target) {
+    if (!details || typeof details !== "object") return;
+    const stack = [details];
+    const seen = new Set();
+    while (stack.length) {
+      const current = stack.pop();
+      if (!current || typeof current !== "object") continue;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      if (Array.isArray(current)) {
+        current.forEach(item => stack.push(item));
+        continue;
+      }
+      Object.entries(current).forEach(([key, value]) => {
+        if (typeof value === "number" && key.startsWith("cited_by_")) {
+          target[key] = (target[key] || 0) + value;
+        } else if (value && typeof value === "object") {
+          stack.push(value);
+        }
+      });
+    }
+  }
+
+  function collectOutletCounts(details, target) {
+    if (!details || typeof details !== "object") return;
+    const fields = ["top_sources", "top_feeds", "top_journal_sources", "sources", "top_news_sources", "most_popular_sources", "outlets"];
+    fields.forEach(field => {
+      const value = details[field];
+      if (!value) return;
+      if (Array.isArray(value)) {
+        value.forEach(item => {
+          if (!item || typeof item !== "object") return;
+          const name = item.name || item.source || item.title || item.journal || item.outlet;
+          const count = typeof item.count === "number" ? item.count : (typeof item.value === "number" ? item.value : (typeof item.total === "number" ? item.total : null));
+          if (name && typeof count === "number" && !Number.isNaN(count)) {
+            target[name] = (target[name] || 0) + count;
+          }
+        });
+      } else if (typeof value === "object") {
+        Object.entries(value).forEach(([name, val]) => {
+          const numeric = typeof val === "number" ? val : (typeof val?.count === "number" ? val.count : null);
+          if (name && typeof numeric === "number" && !Number.isNaN(numeric)) {
+            target[name] = (target[name] || 0) + numeric;
+          }
+        });
+      }
+    });
+  }
+
+  function summarizeAltmetrics(papers = []) {
+    const timelineMap = new Map();
+    const channelTotals = {};
+    const outletTotals = {};
+    let totalScore = 0;
+
+    papers.forEach(paper => {
+      const score = getAltmetricScore(paper);
+      totalScore += score;
+      const details = normalizeAltmetricDetails(paper);
+      const beforeSize = timelineMap.size;
+      collectTimelineFromDetails(details, timelineMap, score);
+      if (timelineMap.size === beforeSize && paper.year && score) {
+        const key = paper.year.toString();
+        timelineMap.set(key, (timelineMap.get(key) || 0) + score);
+      }
+      accumulateChannelCounts(details, channelTotals);
+      collectOutletCounts(details, outletTotals);
+    });
+
+    const timeline = Array.from(timelineMap.entries())
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => parseDateKey(a.label) - parseDateKey(b.label));
+
+    const channels = {};
+    Object.entries(channelTotals).forEach(([raw, value]) => {
+      const friendly = formatChannelName(raw);
+      channels[friendly] = (channels[friendly] || 0) + value;
+    });
+
+    let topOutlet = null;
+    let topOutletCount = 0;
+    Object.entries(outletTotals).forEach(([name, value]) => {
+      if (value > topOutletCount) {
+        topOutlet = name;
+        topOutletCount = value;
+      }
+    });
+
+    const papersByAttention = papers.slice().sort((a, b) => getAltmetricScore(b) - getAltmetricScore(a));
+
+    return {
+      count: papers.length,
+      totalScore,
+      avgScore: papers.length ? totalScore / papers.length : 0,
+      timeline,
+      channels,
+      topOutlet,
+      topOutletCount,
+      topTweetCount: channelTotals.cited_by_tweeters_count || channelTotals.cited_by_twitter_count || 0,
+      topPolicyMentions: channelTotals.cited_by_policy_count || channelTotals.cited_by_policy_sources_count || 0,
+      papersByAttention
+    };
+  }
+
+  function topChannel(channels = {}) {
+    let name = null;
+    let value = 0;
+    Object.entries(channels).forEach(([label, total]) => {
+      if (total > value) {
+        name = label;
+        value = total;
+      }
+    });
+    return { name, value };
+  }
+
+  function extractPaperOutlet(paper) {
+    const details = normalizeAltmetricDetails(paper);
+    const outlets = {};
+    collectOutletCounts(details, outlets);
+    let selected = null;
+    let max = 0;
+    Object.entries(outlets).forEach(([name, value]) => {
+      if (value > max) {
+        max = value;
+        selected = name;
+      }
+    });
+    return selected;
+  }
+
+  function renderAltmetricVisuals(altmetricSummary) {
+    const trendCtxEl = document.getElementById("altmetricTrendChart");
+    const breakdownCtxEl = document.getElementById("altmetricBreakdownChart");
+    if (!trendCtxEl || !breakdownCtxEl) return;
+
+    const globalTimeline = altmetricSummary.global.timeline || [];
+    const imperialTimeline = altmetricSummary.imperial.timeline || [];
+    let timelineLabels = Array.from(new Set([
+      ...globalTimeline.map(d => d.label),
+      ...imperialTimeline.map(d => d.label)
+    ])).sort((a, b) => parseDateKey(a) - parseDateKey(b));
+    if (!timelineLabels.length) {
+      timelineLabels = ["No data"];
+    }
+
+    const globalTrend = timelineLabels.map(label => {
+      const point = globalTimeline.find(d => d.label === label);
+      return point ? point.value : 0;
+    });
+    const imperialTrend = timelineLabels.map(label => {
+      const point = imperialTimeline.find(d => d.label === label);
+      return point ? point.value : 0;
+    });
+
+    if (window.altmetricTrendChart) window.altmetricTrendChart.destroy();
+    window.altmetricTrendChart = new Chart(trendCtxEl.getContext("2d"), {
+      type: "line",
+      data: {
+        labels: timelineLabels,
+        datasets: [
+          {
+            label: "Global attention",
+            data: globalTrend,
+            borderColor: "#1d4ed8",
+            backgroundColor: "rgba(29,78,216,0.15)",
+            fill: false,
+            tension: 0.3
+          },
+          {
+            label: "Imperial attention",
+            data: imperialTrend,
+            borderColor: "#16a34a",
+            backgroundColor: "rgba(22,163,74,0.15)",
+            fill: false,
+            tension: 0.3
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        scales: { y: { beginAtZero: true } },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              title: items => items.map(i => formatTimelineLabel(i.label))
+            }
+          }
+        }
+      }
+    });
+
+    let channelLabels = Array.from(new Set([
+      ...Object.keys(altmetricSummary.global.channels || {}),
+      ...Object.keys(altmetricSummary.imperial.channels || {})
+    ]));
+    if (!channelLabels.length) {
+      channelLabels = ["Attention"];
+    }
+    const globalChannels = channelLabels.map(label => altmetricSummary.global.channels?.[label] || 0);
+    const imperialChannels = channelLabels.map(label => altmetricSummary.imperial.channels?.[label] || 0);
+
+    if (window.altmetricBreakdownChart) window.altmetricBreakdownChart.destroy();
+    window.altmetricBreakdownChart = new Chart(breakdownCtxEl.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: channelLabels,
+        datasets: [
+          {
+            label: "Global",
+            data: globalChannels,
+            backgroundColor: "rgba(37,99,235,0.6)"
+          },
+          {
+            label: "Imperial",
+            data: imperialChannels,
+            backgroundColor: "rgba(34,197,94,0.6)"
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        scales: { y: { beginAtZero: true } },
+        plugins: {
+          legend: { position: "bottom" }
+        }
+      }
+    });
+
+    const tweetText = `${altmetricSummary.global.topTweetCount || 0} global / ${altmetricSummary.imperial.topTweetCount || 0} Imperial`;
+    const policyText = `${altmetricSummary.global.topPolicyMentions || 0} global / ${altmetricSummary.imperial.topPolicyMentions || 0} Imperial`;
+    const outletPieces = [];
+    if (altmetricSummary.global.topOutlet) outletPieces.push(`Global: ${altmetricSummary.global.topOutlet}`);
+    if (altmetricSummary.imperial.topOutlet) outletPieces.push(`Imperial: ${altmetricSummary.imperial.topOutlet}`);
+
+    document.getElementById("altmetric-top-tweets").innerText = tweetText;
+    document.getElementById("altmetric-policy-mentions").innerText = policyText;
+    document.getElementById("altmetric-top-outlet").innerText = outletPieces.length ? outletPieces.join(" | ") : "No outlet data available";
+  }
+
+  async function callDSL(q) {
+    try {
+      const r = await fetch("/api/dimensions", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({query: q})
+      });
+      const data = await r.json();
+      console.log("🔍 DSL Query Result:", data);
+      return data;
+    } catch (e) {
+      console.error("⚠️ DSL call failed", e);
+      return [];
+    }
+  }
+
+  // --- Imperial ID ---
+  let imperialId = null;
+  async function getImperialId() {
+    if (imperialId) return imperialId;
+    const q = `
+      search organizations for "Imperial College London"
+      return organizations[id + name] limit 5
+    `;
+    const res = await callDSL(q);
+    if (res.organizations && res.organizations.length)
+      imperialId = res.organizations[0].id;
+    return imperialId;
+  }
+
+  // --- Client-side aggregation of publications per year ---
+  async function getGlobalCounts(term, period, conceptId = null) {
+    const year = new Date().getFullYear();
+    const filters = [];
+    if (period === "1") filters.push(`year >= ${year - 1}`);
+    if (period === "5") filters.push(`year >= ${year - 5}`);
+    if (conceptId) filters.push(`concepts.id = "${conceptId}"`);
+    const query = `
+      search publications for "${term}"${buildWhereClause(filters)}
+      return publications[year] limit 1000
+    `;
+    const r = await callDSL(query);
+    let pubs = r.publications || r || [];
+    if (!Array.isArray(pubs)) pubs = [];
+    const counts = {};
+    pubs.forEach(p => { if (p.year) counts[p.year] = (counts[p.year] || 0) + 1; });
+    return Object.entries(counts).map(([y,c]) => ({year: +y, count:c})).sort((a,b)=>a.year-b.year);
+  }
+
+async function getImperialCounts(term, period, orgIdOverride = null, conceptId = null) {
+  const year = new Date().getFullYear();
+  const filters = [];
+  if (period === "1") filters.push(`year >= ${year - 1}`);
+  if (period === "5") filters.push(`year >= ${year - 5}`);
+
+  // Use known Imperial identifiers
+  const orgId = orgIdOverride || "grid.4991.5"; // Imperial College London GRID ID
+  const orgName = "Imperial College London";
+
+  filters.push(`(research_orgs.id = "${orgId}" or research_orgs.name = "${orgName}")`);
+  if (conceptId) filters.push(`concepts.id = "${conceptId}"`);
+
+  const query = `
+    search publications for "${term}"${buildWhereClause(filters)}
+    return publications[year] limit 1000
+  `;
+  const r = await callDSL(query);
+
+  let pubs = r.publications || r || [];
+  if (!Array.isArray(pubs)) pubs = [];
+
+  const counts = {};
+  pubs.forEach(p => { if (p.year) counts[p.year] = (counts[p.year] || 0) + 1; });
+  return Object.entries(counts)
+    .map(([y, c]) => ({ year: +y, count: c }))
+    .sort((a, b) => a.year - b.year);
+}
+
+
+  // --- Top papers ---
+  async function getTopPapers(term, period, orgFilters = [], limit = 5, conceptId = null) {
+    const year = new Date().getFullYear();
+    const filters = [];
+    if (period === "1") filters.push(`year >= ${year - 1}`);
+    if (period === "5") filters.push(`year >= ${year - 5}`);
+
+    if (!Array.isArray(orgFilters)) {
+      if (orgFilters) filters.push(orgFilters);
+    } else {
+      filters.push(...orgFilters.filter(Boolean));
+    }
+
+    const query = `
+      search publications for "${term}"${buildWhereClause(filters)}
+      return publications[title + year + times_cited + altmetric + altmetric_details + authors + research_orgs + linkout]
+      sort by times_cited limit ${limit}
+    `;
+    const r = await callDSL(query);
+    return r.publications || [];
+  }
+
+  // --- Search button ---
+  document.getElementById("search-btn").onclick = async () => {
+    const term = document.getElementById("search-term").value.trim();
+    const period = document.getElementById("period-select").value;
+    if (!term) return alert("Enter a keyword first.");
+
+    document.getElementById("dashboard-content").style.display = "none";
+    document.body.insertAdjacentHTML("beforeend","<p id='loading'>Loading data from Dimensions...</p>");
+
+    const orgId = await getImperialId();
+    const resolvedOrgId = orgId;
+    const imperialOrgFilter = `(research_orgs.id = "${orgId}" or research_orgs.name = "Imperial College London")`;
+    const [globalAgg, imperialAgg, topGlobal, topImperial] = await Promise.all([
+      getGlobalCounts(term, period),
+      getImperialCounts(term, period, orgId),
+      getTopPapers(term, period, [], 5),
+      getTopPapers(term, period, [imperialOrgFilter], 5)
+    ]);
+
+    document.getElementById("loading").remove();
+    document.getElementById("dashboard-content").style.display = "block";
+
+    const years = [...new Set([...globalAgg, ...imperialAgg].map(d => d.year))]
+      .sort((a, b) => a - b);
+    const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
+    const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
+
+    const totalGlobal = d3.sum(gCounts);
+    const totalImperial = d3.sum(iCounts);
+    const pct = totalGlobal ? ((totalImperial/totalGlobal)*100).toFixed(1) : 0;
+
+    document.getElementById("global-count").innerText = `${totalGlobal} publications`;
+    document.getElementById("imperial-count").innerText = `${totalImperial} publications (${pct}% of global)`;
+
+    if (window.mainTrendChart) {
+      window.mainTrendChart.destroy();
+    }
+    const combinedCtx = document.getElementById('combinedChart').getContext('2d');
+    window.mainTrendChart = new Chart(combinedCtx, {
+      type: 'line',
+      data: {
+        labels: years,
+        datasets: [
+          { label: 'Global Publications', data: gCounts, borderColor: 'blue', fill: false },
+          { label: 'Imperial Publications', data: iCounts, borderColor: 'green', fill: false }
+        ]
+      },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+
+    const altmetricSummary = {
+      global: summarizeAltmetrics(topGlobal),
+      imperial: summarizeAltmetrics(topImperial)
+    };
+    window.altmetricSummary = altmetricSummary;
+
+    renderAltmetricVisuals(altmetricSummary);
+
+    const combinedPapers = [...altmetricSummary.global.papersByAttention, ...altmetricSummary.imperial.papersByAttention]
+      .filter(p => getAltmetricScore(p) > 0);
+    const seenTitles = new Set();
+    const highAttention = [];
+    combinedPapers.forEach(paper => {
+      const key = `${paper.title || ""}-${paper.doi || ""}`;
+      if (!seenTitles.has(key)) {
+        seenTitles.add(key);
+        highAttention.push(paper);
+      }
+    });
+    const topHighAttention = highAttention.slice(0, 3);
+    window.currentHighAttentionPapers = topHighAttention;
+    const highAttentionLinks = topHighAttention.map((paper, idx) => `<a href="#" data-high-attention="${idx}">${safeValue(paper.title)}</a>`);
+
+    const globalPeak = altmetricSummary.global.timeline.slice().sort((a, b) => b.value - a.value)[0];
+    const imperialPeak = altmetricSummary.imperial.timeline.slice().sort((a, b) => b.value - a.value)[0];
+    const globalChannelLeader = topChannel(altmetricSummary.global.channels);
+    const imperialChannelLeader = topChannel(altmetricSummary.imperial.channels);
+
+    const narrativeBits = [`Imperial’s publication activity compared to global research on "${term}".`];
+    if (globalPeak && globalPeak.value) {
+      narrativeBits.push(`Global attention peaked around ${formatTimelineLabel(globalPeak.label)} with a combined Altmetric score of ${globalPeak.value.toFixed(1)}.`);
+    }
+    if (imperialPeak && imperialPeak.value) {
+      narrativeBits.push(`Imperial papers experienced a surge around ${formatTimelineLabel(imperialPeak.label)} reaching ${imperialPeak.value.toFixed(1)} Altmetric points.`);
+    }
+    if (globalChannelLeader.name || imperialChannelLeader.name) {
+      const channelNotes = [];
+      if (globalChannelLeader.name) channelNotes.push(`global engagement led by ${globalChannelLeader.name.toLowerCase()}`);
+      if (imperialChannelLeader.name) channelNotes.push(`Imperial coverage strongest via ${imperialChannelLeader.name.toLowerCase()}`);
+      narrativeBits.push(channelNotes.join("; ") + ".");
+    }
+    if (highAttentionLinks.length) {
+      narrativeBits.push(`Explore high-attention papers such as ${highAttentionLinks.join(", ")} to dive into the stories behind the spikes.`);
+    }
+
+    const narrativeEl = document.getElementById("trend-narrative");
+    narrativeEl.innerHTML = narrativeBits.join(" ");
+
+    const highAttentionContainer = document.getElementById("altmetric-high-attention");
+    highAttentionContainer.innerHTML = highAttentionLinks.length ? highAttentionLinks.join(" • ") : "No high-attention highlights yet.";
+
+    document.querySelectorAll('a[data-high-attention]').forEach(anchor => {
+      anchor.addEventListener("click", evt => {
+        evt.preventDefault();
+        const idx = Number(anchor.dataset.highAttention);
+        const targetPaper = window.currentHighAttentionPapers?.[idx];
+        if (targetPaper?.title) {
+          showTheme(targetPaper.title, period, resolvedOrgId);
+        }
+      });
+    });
+    const keywordSet = new Set();
+    [...topGlobal, ...topImperial].forEach(p => {
+      if (p.title) {
+        p.title.toLowerCase().split(/\W+/).forEach(w => {
+          if (w.length > 5) keywordSet.add(w);
+        });
+      }
+    });
+    const topics = Array.from(keywordSet).slice(0, 6);
+    const topKeywords = topics.join(", ");
+    document.getElementById("global-topics").innerText = topKeywords || "Various";
+    document.getElementById("imperial-themes").innerText = topKeywords || "Various";
+
+
+    function render(divId, papers) {
+      const div = document.querySelector(divId);
+      div.innerHTML = "";
+      papers.forEach(p => {
+        const authors = (p.authors||[]).map(a => a.first_name?`${a.first_name} ${a.last_name}`:a).join(", ");
+        const details = normalizeAltmetricDetails(p);
+        const score = getAltmetricScore(p);
+        const tweets = getDetailValue(details, ["cited_by_tweeters_count", "cited_by_twitter_count", "tweets_count"]);
+        const policy = getDetailValue(details, ["cited_by_policy_count", "policy_mentions"]);
+        const outlet = extractPaperOutlet(p);
+        div.innerHTML += `<p><b>${safeValue(p.title)}</b><br>
+          Year: ${safeValue(p.year)} | Citations: ${safeValue(p.times_cited,0)} | Altmetric Score: ${safeValue(score,0)}<br>
+          <em>Authors:</em> ${safeValue(authors)}<br>
+          <em>Tweets:</em> ${safeValue(tweets,0)} | <em>Policy:</em> ${safeValue(policy,0)} | <em>Top outlet:</em> ${safeValue(outlet)}<br>
+          <a href="${safeValue(p.linkout,'#')}" target="_blank">View in Dimensions</a></p>`;
+      });
+    }
+    render("#top-papers-global", topGlobal);
+    render("#top-papers-imperial", topImperial);
+
+    document.getElementById("imperial-opportunities").innerText =
+      `Imperial shows strong output but could expand collaboration on related ${term} research topics.`;
+
+    const themeDiv = d3.select("#theme-tags");
+    themeDiv.html("");
+    topics.forEach(t => themeDiv.append("span").attr("class","tag").text(t)
+      .on("click", ()=> showTheme(t, period, resolvedOrgId)));
+  };
+
+  async function showTheme(theme, period, orgId) {
+    const modal = document.getElementById("theme-modal");
+    modal.style.display = "block";
+    document.getElementById("theme-title").innerText = `Theme: ${theme}`;
+
+    const [globalAgg, imperialAgg, topGlobal] = await Promise.all([
+      getGlobalCounts(theme, period),
+      getImperialCounts(theme, period, orgId, currentSchoolFilter),
+      getTopPapers(theme, period, [], 5)
+    ]);
+
+    const years = [...new Set([
+      ...globalAgg.map(d => d.year),
+      ...imperialAgg.map(d => d.year)
+    ].filter(Boolean))].sort((a, b) => a - b);
+    const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
+    const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
+
+    const schoolLabel = currentSchoolFilter === SCHOOL_ALL ? "Imperial" : currentSchoolFilter;
+    document.getElementById("theme-summary").innerText =
+      `${d3.sum(gCounts)} global publications on ${theme}, including ${d3.sum(iCounts)} from ${schoolLabel}.`;
+
+    // Destroy old chart if it exists
+    if (window.themeTrendChart) {
+      window.themeTrendChart.destroy();
+    }
+
+    const themeCtx = document.getElementById('theme-trend').getContext('2d');
+    window.themeTrendChart = new Chart(themeCtx, {
+      type: 'line',
+      data: {
+        labels: years,
+        datasets: [
+          { label: 'Global Publications', data: gCounts, borderColor: 'blue', fill: false },
+          { label: `${schoolLabel} Publications`, data: iCounts, borderColor: 'green', fill: false }
+        ]
+      },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+
+
+    const div = document.getElementById("theme-papers");
+    div.innerHTML = topGlobal.map(p=>`
+      <p><b>${safeValue(p.title)}</b> (${safeValue(p.year)})<br>
+      Citations: ${safeValue(p.times_cited)} | Altmetric: ${safeValue(p.altmetric)}<br>
+      <a href="${safeValue(p.linkout,'#')}" target="_blank">View in Dimensions</a></p>
+    `).join("");
+  }
+
+  document.getElementById("close-modal").onclick = () =>
+    document.getElementById("theme-modal").style.display="none";
+
+});
+</script>
+</body>
+</html>
