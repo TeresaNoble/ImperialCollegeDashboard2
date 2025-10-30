@@ -5,6 +5,7 @@
   <title>Imperial College Research Dashboard (Live Dimensions Data)</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="school_mapping.js"></script>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #f9fafc; }
     h1 { color: #003366; }
@@ -61,9 +62,25 @@
     </div>
 
     <div class="card">
-      <h2>📈 Publications Trend</h2>
+      <div class="chart-header">
+        <h2>📈 Publications Trend</h2>
+        <div class="filter-select">
+          <label for="school-filter">Convergence school:</label>
+          <select id="school-filter"></select>
+        </div>
+      </div>
       <canvas id="combinedChart"></canvas>
       <p id="trend-narrative" class="narrative"></p>
+    </div>
+
+    <div class="card">
+      <h2>🏛️ School Activity Over Time</h2>
+      <canvas id="schoolStackedChart"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>⭐ Leading Labs & Growth</h2>
+      <div id="school-summary"></div>
     </div>
 
     <div class="card">
@@ -124,9 +141,281 @@
 <script>
 document.addEventListener("DOMContentLoaded", () => {
 
+  const SCHOOL_ALL = "All Schools";
+  const knownSchoolMapping = window.convergenceSchoolMapping || {};
+  const colorPalette = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
+  ];
+  const OTHER_SCHOOL = "Unmapped Units";
+  let lastSearchContext = {
+    term: "",
+    period: "",
+    orgId: null,
+    years: [],
+    globalAgg: [],
+    imperialAgg: [],
+    schoolYearCounts: {},
+    deptYearCounts: {}
+  };
+  let currentSchoolFilter = SCHOOL_ALL;
+  let lastImperialOrgId = null;
+
+  function hexToRgba(hex, alpha = 1) {
+    const sanitized = hex.replace('#', '');
+    const bigint = parseInt(sanitized, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
   function safeValue(v, fallback="N/A") {
     return (v !== null && v !== undefined && v !== "NaN") ? v : fallback;
   }
+
+  function buildSchoolFilterClause(school) {
+    if (!school || school === SCHOOL_ALL) return null;
+    const departments = Object.entries(knownSchoolMapping)
+      .filter(([, mappedSchool]) => mappedSchool === school)
+      .map(([deptName]) => deptName)
+      .sort();
+    if (!departments.length) return null;
+    const clauses = departments.map(name => `research_orgs.name = "${name.replace(/"/g, '\\"')}"`);
+    return `(${clauses.join(' or ')})`;
+  }
+
+  function aggregateDepartmentData(publications) {
+    const yearsSet = new Set();
+    const schoolYearCounts = {};
+    const deptYearCounts = {};
+
+    publications.forEach(pub => {
+      if (!pub || !pub.year) return;
+      yearsSet.add(pub.year);
+      const seenDeptYear = new Set();
+      (pub.research_orgs || []).forEach(org => {
+        const name = typeof org === 'string' ? org : org?.name;
+        if (!name || !knownSchoolMapping[name]) return;
+        const dedupeKey = `${name}-${pub.year}`;
+        if (seenDeptYear.has(dedupeKey)) return;
+        seenDeptYear.add(dedupeKey);
+
+        const school = knownSchoolMapping[name];
+        schoolYearCounts[school] = schoolYearCounts[school] || {};
+        schoolYearCounts[school][pub.year] = (schoolYearCounts[school][pub.year] || 0) + 1;
+
+        if (!deptYearCounts[name]) {
+          deptYearCounts[name] = { school, counts: {} };
+        }
+        deptYearCounts[name].counts[pub.year] = (deptYearCounts[name].counts[pub.year] || 0) + 1;
+      });
+    });
+
+    return {
+      years: Array.from(yearsSet).sort((a, b) => a - b),
+      schoolYearCounts,
+      deptYearCounts
+    };
+  }
+
+  function populateSchoolFilter(schoolYearCounts) {
+    const select = document.getElementById("school-filter");
+    if (!select) return;
+    const schools = Object.keys(schoolYearCounts || {}).sort();
+    select.innerHTML = "";
+
+    const allOption = document.createElement("option");
+    allOption.value = SCHOOL_ALL;
+    allOption.textContent = SCHOOL_ALL;
+    select.appendChild(allOption);
+
+    schools.forEach(school => {
+      const option = document.createElement("option");
+      option.value = school;
+      option.textContent = school;
+      select.appendChild(option);
+    });
+
+    select.value = currentSchoolFilter;
+    select.onchange = () => {
+      currentSchoolFilter = select.value;
+      applySchoolFilter();
+    };
+  }
+
+  function updateMetricSummaries(imperialSeries, globalSeries) {
+    const totalImperial = d3.sum(imperialSeries);
+    const totalGlobal = d3.sum(globalSeries);
+    const pct = totalGlobal ? ((totalImperial / totalGlobal) * 100).toFixed(1) : 0;
+    const label = currentSchoolFilter === SCHOOL_ALL ? "Imperial" : currentSchoolFilter;
+
+    document.getElementById("global-count").innerText = `${totalGlobal} publications`;
+    document.getElementById("imperial-count").innerText = `${totalImperial} publications (${pct}% of global) - ${label}`;
+  }
+
+  function updateStackedChart() {
+    const ctx = document.getElementById('schoolStackedChart').getContext('2d');
+    const years = lastSearchContext.years;
+    const schoolYearCounts = lastSearchContext.schoolYearCounts || {};
+    const datasets = Object.entries(schoolYearCounts)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([school, counts], idx) => {
+        const highlight = currentSchoolFilter === SCHOOL_ALL || currentSchoolFilter === school;
+        const alpha = highlight ? 0.8 : 0.2;
+        return {
+          label: school,
+          data: years.map(y => counts[y] || 0),
+          backgroundColor: hexToRgba(colorPalette[idx % colorPalette.length], alpha),
+          borderColor: hexToRgba(colorPalette[idx % colorPalette.length], 1),
+          borderWidth: highlight ? 1.5 : 0.5,
+          stack: 'schools'
+        };
+      });
+
+    if (!window.schoolStackedChart) {
+      window.schoolStackedChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: years,
+          datasets: datasets
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: { stacked: true },
+            y: { stacked: true, beginAtZero: true }
+          },
+          plugins: {
+            legend: { position: 'bottom' }
+          }
+        }
+      });
+    } else {
+      window.schoolStackedChart.data.labels = years;
+      window.schoolStackedChart.data.datasets = datasets;
+      window.schoolStackedChart.update();
+    }
+  }
+
+  function renderSummaryTable(selectedSchool) {
+    const container = document.getElementById("school-summary");
+    if (!container) return;
+    const years = lastSearchContext.years;
+    const deptEntries = Object.entries(lastSearchContext.deptYearCounts || {}).filter(([, info]) =>
+      !selectedSchool || selectedSchool === SCHOOL_ALL || info.school === selectedSchool
+    );
+
+    if (!deptEntries.length) {
+      container.innerHTML = "<p>No departmental activity recorded for this selection.</p>";
+      return;
+    }
+
+    const latestYear = years[years.length - 1];
+    const rows = deptEntries.map(([dept, info]) => {
+      const totals = years.map(y => info.counts[y] || 0);
+      const total = d3.sum(totals);
+      const startYear = years[0];
+      const startVal = info.counts[startYear] || 0;
+      const endVal = info.counts[latestYear] || 0;
+      let growth;
+      if (startVal === 0) {
+        growth = endVal > 0 ? "New activity" : "0%";
+      } else {
+        const pct = ((endVal - startVal) / startVal) * 100;
+        growth = `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+      }
+      return {
+        dept,
+        school: info.school,
+        total,
+        latest: endVal,
+        growth
+      };
+    }).filter(row => row.total > 0);
+
+    rows.sort((a, b) => b.total - a.total);
+    const topRows = rows.slice(0, 5);
+
+    const schoolLabel = selectedSchool === SCHOOL_ALL ? "All schools" : selectedSchool;
+    container.innerHTML = `
+      <p><span class="badge">${schoolLabel}</span> Top labs by output (${years[0]}–${latestYear}).</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Department / Unit</th>
+            <th>Convergence School</th>
+            <th>Total Publications</th>
+            <th>Latest Year (${latestYear})</th>
+            <th>Growth vs ${years[0]}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${topRows.map(row => `
+            <tr>
+              <td>${row.dept}</td>
+              <td>${row.school}</td>
+              <td>${row.total}</td>
+              <td>${row.latest}</td>
+              <td>${row.growth}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function applySchoolFilter() {
+    if (!lastSearchContext.years.length) {
+      const derivedYears = [...new Set([
+        ...lastSearchContext.globalAgg.map(d => d.year),
+        ...lastSearchContext.imperialAgg.map(d => d.year)
+      ].filter(Boolean))].sort((a, b) => a - b);
+      lastSearchContext.years = derivedYears;
+    }
+
+    const years = lastSearchContext.years;
+    if (!years.length) return;
+    const globalSeries = years.map(y => (lastSearchContext.globalAgg.find(d => d.year === y)?.count) || 0);
+
+    let imperialSeries;
+    if (currentSchoolFilter === SCHOOL_ALL) {
+      imperialSeries = years.map(y => (lastSearchContext.imperialAgg.find(d => d.year === y)?.count) || 0);
+    } else {
+      const schoolCounts = lastSearchContext.schoolYearCounts[currentSchoolFilter] || {};
+      imperialSeries = years.map(y => schoolCounts[y] || 0);
+    }
+
+    if (!window.mainTrendChart) {
+      const combinedCtx = document.getElementById('combinedChart').getContext('2d');
+      window.mainTrendChart = new Chart(combinedCtx, {
+        type: 'line',
+        data: {
+          labels: years,
+          datasets: [
+            { label: 'Global Publications', data: globalSeries, borderColor: 'blue', fill: false },
+            { label: 'Imperial Publications', data: imperialSeries, borderColor: 'green', fill: false }
+          ]
+        },
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+      });
+    } else {
+      window.mainTrendChart.data.labels = years;
+      window.mainTrendChart.data.datasets[0].data = globalSeries;
+      window.mainTrendChart.data.datasets[1].data = imperialSeries;
+      window.mainTrendChart.data.datasets[1].label = currentSchoolFilter === SCHOOL_ALL ? 'Imperial Publications' : `${currentSchoolFilter} Publications`;
+      window.mainTrendChart.update();
+    }
+
+    updateMetricSummaries(imperialSeries, globalSeries);
+    updateStackedChart();
+    renderSummaryTable(currentSchoolFilter);
+
+    const narrativeLabel = currentSchoolFilter === SCHOOL_ALL ? 'Imperial' : currentSchoolFilter;
+    document.getElementById("trend-narrative").innerText =
+      `${narrativeLabel} publication activity compared to global research on "${lastSearchContext.term}".`;
+  }
+
 
   function buildWhereClause(filters = []) {
     const clauses = filters.filter(Boolean);
@@ -736,16 +1025,20 @@ async function getImperialCounts(term, period, orgIdOverride = null, conceptId =
 
     const [globalAgg, imperialAgg, topGlobal] = await Promise.all([
       getGlobalCounts(theme, period),
-      getImperialCounts(theme, period, orgId),
+      getImperialCounts(theme, period, orgId, currentSchoolFilter),
       getTopPapers(theme, period, [], 5)
     ]);
 
-    const years = [...new Set(globalAgg.map(d=>d.year))].sort();
+    const years = [...new Set([
+      ...globalAgg.map(d => d.year),
+      ...imperialAgg.map(d => d.year)
+    ].filter(Boolean))].sort((a, b) => a - b);
     const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
     const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
 
+    const schoolLabel = currentSchoolFilter === SCHOOL_ALL ? "Imperial" : currentSchoolFilter;
     document.getElementById("theme-summary").innerText =
-      `${d3.sum(gCounts)} global publications on ${theme}, including ${d3.sum(iCounts)} from Imperial.`;
+      `${d3.sum(gCounts)} global publications on ${theme}, including ${d3.sum(iCounts)} from ${schoolLabel}.`;
 
     // Destroy old chart if it exists
     if (window.themeTrendChart) {
@@ -759,7 +1052,7 @@ async function getImperialCounts(term, period, orgIdOverride = null, conceptId =
         labels: years,
         datasets: [
           { label: 'Global Publications', data: gCounts, borderColor: 'blue', fill: false },
-          { label: 'Imperial Publications', data: iCounts, borderColor: 'green', fill: false }
+          { label: `${schoolLabel} Publications`, data: iCounts, borderColor: 'green', fill: false }
         ]
       },
       options: { responsive: true, scales: { y: { beginAtZero: true } } }
