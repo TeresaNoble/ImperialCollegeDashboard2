@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Imperial College Research Dashboard (Live Dimensions Data)</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f9fafc; }
+    h1 { color: #003366; }
+    .card { background: #fff; padding: 15px; margin: 10px 0; border-radius: 6px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .flex { display: flex; gap: 20px; flex-wrap: wrap; }
+    .tag { background: #007bff; color: white; padding: 5px 10px; margin: 3px;
+           border-radius: 4px; cursor: pointer; display: inline-block; }
+    .tag:hover { background: #0056b3; }
+    input, select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    input { width: 250px; }
+    button { padding: 8px 12px; border: none; background: #007bff; color: white; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #0056b3; }
+    #theme-modal { display:none; position:fixed; top:5%; left:10%; width:80%; height:85%;
+                   background:white; border:1px solid #ccc; overflow:auto; padding:20px; z-index:1000; }
+    #theme-modal h2 { margin-top:0; }
+    #close-modal { float:right; cursor:pointer; color:red; font-weight:bold; }
+  </style>
+</head>
+<body>
+
+  <h1>🌍 Imperial College Research Dashboard (Live from Dimensions)</h1>
+  <p>Explore global research topics and Imperial’s contributions — using live Dimensions data.</p>
+
+  <div class="card">
+    <input type="text" id="search-term" placeholder="Enter keyword (e.g. wildfire, malaria)">
+    <select id="period-select">
+      <option value="all">All years</option>
+      <option value="1">Last 1 year</option>
+      <option value="5">Last 5 years</option>
+    </select>
+    <button id="search-btn">Search</button>
+  </div>
+
+  <div id="dashboard-content" style="display:none;">
+    <div class="flex">
+      <div class="card" style="flex:1">
+        <h2>🌐 Global Publications</h2>
+        <p id="global-count"></p>
+        <p><strong>Hot topics:</strong> <span id="global-topics"></span></p>
+      </div>
+      <div class="card" style="flex:1">
+        <h2>🎓 Imperial Publications</h2>
+        <p id="imperial-count"></p>
+        <p><strong>Imperial themes:</strong> <span id="imperial-themes"></span></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>📈 Publications Trend</h2>
+      <canvas id="combinedChart"></canvas>
+      <p id="trend-narrative" class="narrative"></p>
+    </div>
+
+    <div class="card">
+      <h2>🔥 Research Themes</h2>
+      <div id="theme-tags"></div>
+    </div>
+
+    <div class="card">
+      <h2>📄 Top Papers</h2>
+      <h3>🌐 Global Top Papers</h3>
+      <div id="top-papers-global"></div>
+      <h3>🎓 Imperial Top Papers</h3>
+      <div id="top-papers-imperial"></div>
+    </div>
+
+    <div class="card">
+      <h2>🚀 Opportunities for Imperial</h2>
+      <p id="imperial-opportunities" class="narrative"></p>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="theme-modal">
+    <span id="close-modal">✖</span>
+    <h2 id="theme-title"></h2>
+    <p id="theme-summary" class="narrative"></p>
+    <canvas id="theme-trend"></canvas>
+    <div id="theme-papers"></div>
+  </div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+
+  function safeValue(v, fallback="N/A") {
+    return (v !== null && v !== undefined && v !== "NaN") ? v : fallback;
+  }
+
+  async function callDSL(q) {
+    try {
+      const r = await fetch("/api/dimensions", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({query: q})
+      });
+      const data = await r.json();
+      console.log("🔍 DSL Query Result:", data);
+      return data;
+    } catch (e) {
+      console.error("⚠️ DSL call failed", e);
+      return [];
+    }
+  }
+
+  // --- Imperial ID ---
+  let imperialId = null;
+  async function getImperialId() {
+    if (imperialId) return imperialId;
+    const q = `
+      search organizations for "Imperial College London"
+      return organizations[id + name] limit 5
+    `;
+    const res = await callDSL(q);
+    if (res.organizations && res.organizations.length)
+      imperialId = res.organizations[0].id;
+    return imperialId;
+  }
+
+  // --- Client-side aggregation of publications per year ---
+  async function getGlobalCounts(term, period) {
+    const year = new Date().getFullYear();
+    let filter = "";
+    if (period === "1") filter = `where year >= ${year - 1}`;
+    if (period === "5") filter = `where year >= ${year - 5}`;
+    const query = `
+      search publications for "${term}" ${filter}
+      return publications[year] limit 1000
+    `;
+    const r = await callDSL(query);
+    let pubs = r.publications || r || [];
+    if (!Array.isArray(pubs)) pubs = [];
+    const counts = {};
+    pubs.forEach(p => { if (p.year) counts[p.year] = (counts[p.year] || 0) + 1; });
+    return Object.entries(counts).map(([y,c]) => ({year: +y, count:c})).sort((a,b)=>a.year-b.year);
+  }
+
+async function getImperialCounts(term, period) {
+  const year = new Date().getFullYear();
+  let filter = "";
+  if (period === "1") filter = `where year >= ${year - 1}`;
+  if (period === "5") filter = `where year >= ${year - 5}`;
+
+  // Use known Imperial identifiers
+  const orgId = "grid.4991.5"; // Imperial College London GRID ID
+  const orgName = "Imperial College London";
+
+  // Try both id and name filters in one query
+  const query = `
+    search publications for "${term}" ${filter} 
+    where research_orgs.id = "${orgId}" or research_orgs.name = "${orgName}"
+    return publications[year] limit 1000
+  `;
+  const r = await callDSL(query);
+
+  let pubs = r.publications || r || [];
+  if (!Array.isArray(pubs)) pubs = [];
+
+  const counts = {};
+  pubs.forEach(p => { if (p.year) counts[p.year] = (counts[p.year] || 0) + 1; });
+  return Object.entries(counts)
+    .map(([y, c]) => ({ year: +y, count: c }))
+    .sort((a, b) => a.year - b.year);
+}
+
+
+  // --- Top papers ---
+  async function getTopPapers(term, period, orgFilter="", limit=5) {
+    const year = new Date().getFullYear();
+    let filter = "";
+    if (period === "1") filter = `where year >= ${year - 1}`;
+    if (period === "5") filter = `where year >= ${year - 5}`;
+    const query = `
+      search publications for "${term}" ${filter} ${orgFilter}
+      return publications[title + year + times_cited + altmetric + authors + research_orgs + linkout]
+      sort by times_cited limit ${limit}
+    `;
+    const r = await callDSL(query);
+    return r.publications || [];
+  }
+
+  // --- Search button ---
+  document.getElementById("search-btn").onclick = async () => {
+    const term = document.getElementById("search-term").value.trim();
+    const period = document.getElementById("period-select").value;
+    if (!term) return alert("Enter a keyword first.");
+
+    document.getElementById("dashboard-content").style.display = "none";
+    document.body.insertAdjacentHTML("beforeend","<p id='loading'>Loading data from Dimensions...</p>");
+
+    const orgId = await getImperialId();
+    const [globalAgg, imperialAgg, topGlobal, topImperial] = await Promise.all([
+      getGlobalCounts(term, period),
+      getImperialCounts(term, period, orgId),
+      getTopPapers(term, period, "", 5),
+      getTopPapers(term, period, `where research_orgs.id = "${orgId}"`, 5)
+    ]);
+
+    document.getElementById("loading").remove();
+    document.getElementById("dashboard-content").style.display = "block";
+
+    const years = [...new Set(globalAgg.map(d=>d.year))].sort();
+    const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
+    const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
+
+    const totalGlobal = d3.sum(gCounts);
+    const totalImperial = d3.sum(iCounts);
+    const pct = totalGlobal ? ((totalImperial/totalGlobal)*100).toFixed(1) : 0;
+
+    document.getElementById("global-count").innerText = `${totalGlobal} publications`;
+    document.getElementById("imperial-count").innerText = `${totalImperial} publications (${pct}% of global)`;
+
+    new Chart(document.getElementById('combinedChart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: years,
+        datasets: [
+          { label: 'Global Publications', data: gCounts, borderColor: 'blue', fill: false },
+          { label: 'Imperial Publications', data: iCounts, borderColor: 'green', fill: false }
+        ]
+      },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+
+    document.getElementById("trend-narrative").innerText =
+      `Imperial’s publication activity compared to global research on "${term}".`;
+const keywordSet = new Set();
+[...topGlobal, ...topImperial].forEach(p => {
+  if (p.title) {
+    p.title.toLowerCase().split(/\W+/).forEach(w => {
+      if (w.length > 5) keywordSet.add(w);
+    });
+  }
+});
+const topKeywords = Array.from(keywordSet).slice(0, 6).join(", ");
+document.getElementById("global-topics").innerText = topKeywords || "Various";
+document.getElementById("imperial-themes").innerText = topKeywords || "Various";
+
+
+    function render(divId, papers) {
+      const div = document.querySelector(divId);
+      div.innerHTML = "";
+      papers.forEach(p => {
+        const authors = (p.authors||[]).map(a => a.first_name?`${a.first_name} ${a.last_name}`:a).join(", ");
+        div.innerHTML += `<p><b>${safeValue(p.title)}</b><br>
+          Year: ${safeValue(p.year)} | Citations: ${safeValue(p.times_cited,0)} | Altmetric: ${safeValue(p.altmetric,0)}<br>
+          <em>Authors:</em> ${safeValue(authors)}<br>
+          <a href="${safeValue(p.linkout,'#')}" target="_blank">View in Dimensions</a></p>`;
+      });
+    }
+    render("#top-papers-global", topGlobal);
+    render("#top-papers-imperial", topImperial);
+
+    document.getElementById("imperial-opportunities").innerText =
+      `Imperial shows strong output but could expand collaboration on related ${term} research topics.`;
+
+    const themeDiv = d3.select("#theme-tags");
+    themeDiv.html("");
+    topics.forEach(t => themeDiv.append("span").attr("class","tag").text(t)
+      .on("click", ()=> showTheme(t, period, orgId)));
+  };
+
+  async function showTheme(theme, period, orgId) {
+    const modal = document.getElementById("theme-modal");
+    modal.style.display = "block";
+    document.getElementById("theme-title").innerText = `Theme: ${theme}`;
+
+    const [globalAgg, imperialAgg, topGlobal] = await Promise.all([
+      getGlobalCounts(theme, period),
+      getImperialCounts(theme, period, orgId),
+      getTopPapers(theme, period, "", 5)
+    ]);
+
+    const years = [...new Set(globalAgg.map(d=>d.year))].sort();
+    const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
+    const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
+
+    document.getElementById("theme-summary").innerText =
+      `${d3.sum(gCounts)} global publications on ${theme}, including ${d3.sum(iCounts)} from Imperial.`;
+
+ // Destroy old chart if it exists
+if (window.pubChart) {
+  window.pubChart.destroy();
+}
+
+const ctx = document.getElementById('combinedChart').getContext('2d');
+window.pubChart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: years,
+    datasets: [
+      { label: 'Global Publications', data: gCounts, borderColor: 'blue', fill: false },
+      { label: 'Imperial Publications', data: iCounts, borderColor: 'green', fill: false }
+    ]
+  },
+  options: { responsive: true, scales: { y: { beginAtZero: true } } }
+});
+
+
+    const div = document.getElementById("theme-papers");
+    div.innerHTML = topGlobal.map(p=>`
+      <p><b>${safeValue(p.title)}</b> (${safeValue(p.year)})<br>
+      Citations: ${safeValue(p.times_cited)} | Altmetric: ${safeValue(p.altmetric)}<br>
+      <a href="${safeValue(p.linkout,'#')}" target="_blank">View in Dimensions</a></p>
+    `).join("");
+  }
+
+  document.getElementById("close-modal").onclick = () =>
+    document.getElementById("theme-modal").style.display="none";
+
+});
+</script>
+</body>
+</html>
