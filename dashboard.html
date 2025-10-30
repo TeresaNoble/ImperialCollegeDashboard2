@@ -218,7 +218,8 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
     document.getElementById("loading").remove();
     document.getElementById("dashboard-content").style.display = "block";
 
-    const years = [...new Set(globalAgg.map(d=>d.year))].sort();
+    const years = [...new Set([...globalAgg, ...imperialAgg].map(d => d.year))]
+      .sort((a, b) => a - b);
     const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
     const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
 
@@ -229,7 +230,11 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
     document.getElementById("global-count").innerText = `${totalGlobal} publications`;
     document.getElementById("imperial-count").innerText = `${totalImperial} publications (${pct}% of global)`;
 
-    new Chart(document.getElementById('combinedChart').getContext('2d'), {
+    if (window.mainTrendChart) {
+      window.mainTrendChart.destroy();
+    }
+    const combinedCtx = document.getElementById('combinedChart').getContext('2d');
+    window.mainTrendChart = new Chart(combinedCtx, {
       type: 'line',
       data: {
         labels: years,
@@ -292,30 +297,31 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
       getTopPapers(theme, period, [], 5)
     ]);
 
-    const years = [...new Set(globalAgg.map(d=>d.year))].sort();
+    const years = [...new Set([...globalAgg, ...imperialAgg].map(d => d.year))]
+      .sort((a, b) => a - b);
     const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
     const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
 
     document.getElementById("theme-summary").innerText =
       `${d3.sum(gCounts)} global publications on ${theme}, including ${d3.sum(iCounts)} from Imperial.`;
 
- // Destroy old chart if it exists
-if (window.pubChart) {
-  window.pubChart.destroy();
-}
+    // Destroy old chart if it exists
+    if (window.themeTrendChart) {
+      window.themeTrendChart.destroy();
+    }
 
-const ctx = document.getElementById('combinedChart').getContext('2d');
-window.pubChart = new Chart(ctx, {
-  type: 'line',
-  data: {
-    labels: years,
-    datasets: [
-      { label: 'Global Publications', data: gCounts, borderColor: 'blue', fill: false },
-      { label: 'Imperial Publications', data: iCounts, borderColor: 'green', fill: false }
-    ]
-  },
-  options: { responsive: true, scales: { y: { beginAtZero: true } } }
-});
+    const themeCtx = document.getElementById('theme-trend').getContext('2d');
+    window.themeTrendChart = new Chart(themeCtx, {
+      type: 'line',
+      data: {
+        labels: years,
+        datasets: [
+          { label: 'Global Publications', data: gCounts, borderColor: 'blue', fill: false },
+          { label: 'Imperial Publications', data: iCounts, borderColor: 'green', fill: false }
+        ]
+      },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
 
 
     const div = document.getElementById("theme-papers");
