@@ -1,5 +1,5 @@
-from flask import Flask, request, jsonify, send_from_directory
-import requests, os
+from flask import Flask, request, jsonify, send_from_directory # type: ignore
+import requests, os # type: ignore
 
 # Create the Flask app FIRST
 app = Flask(__name__)

@@ -99,13 +99,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return clauses.length ? ` where ${clauses.join(" and ")}` : "";
   }
 
-  function buildPeriodFilters(period) {
-    const currentYear = new Date().getFullYear();
-    if (period === "1") return [`year >= ${currentYear - 1}`];
-    if (period === "5") return [`year >= ${currentYear - 5}`];
-    return [];
-  }
-
   async function callDSL(q) {
     try {
       const r = await fetch("/api/dimensions", {
@@ -138,7 +131,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Client-side aggregation of publications per year ---
   async function getGlobalCounts(term, period) {
-    const filters = buildPeriodFilters(period);
+    const year = new Date().getFullYear();
+    const filters = [];
+    if (period === "1") filters.push(`year >= ${year - 1}`);
+    if (period === "5") filters.push(`year >= ${year - 5}`);
     const query = `
       search publications for "${term}"${buildWhereClause(filters)}
       return publications[year] limit 1000
@@ -152,7 +148,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
 async function getImperialCounts(term, period, orgIdOverride = null) {
-  const filters = buildPeriodFilters(period);
+  const year = new Date().getFullYear();
+  const filters = [];
+  if (period === "1") filters.push(`year >= ${year - 1}`);
+  if (period === "5") filters.push(`year >= ${year - 5}`);
 
   // Use known Imperial identifiers
   const orgId = orgIdOverride || "grid.4991.5"; // Imperial College London GRID ID
@@ -179,7 +178,10 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
 
   // --- Top papers ---
   async function getTopPapers(term, period, orgFilters = [], limit = 5) {
-    const filters = buildPeriodFilters(period);
+    const year = new Date().getFullYear();
+    const filters = [];
+    if (period === "1") filters.push(`year >= ${year - 1}`);
+    if (period === "5") filters.push(`year >= ${year - 5}`);
 
     if (!Array.isArray(orgFilters)) {
       if (orgFilters) filters.push(orgFilters);
@@ -206,11 +208,10 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
     document.body.insertAdjacentHTML("beforeend","<p id='loading'>Loading data from Dimensions...</p>");
 
     const orgId = await getImperialId();
-    const resolvedOrgId = orgId || "grid.4991.5";
-    const imperialOrgFilter = `(research_orgs.id = "${resolvedOrgId}" or research_orgs.name = "Imperial College London")`;
+    const imperialOrgFilter = `(research_orgs.id = "${orgId}" or research_orgs.name = "Imperial College London")`;
     const [globalAgg, imperialAgg, topGlobal, topImperial] = await Promise.all([
       getGlobalCounts(term, period),
-      getImperialCounts(term, period, resolvedOrgId),
+      getImperialCounts(term, period, orgId),
       getTopPapers(term, period, [], 5),
       getTopPapers(term, period, [imperialOrgFilter], 5)
     ]);
@@ -286,19 +287,17 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
   };
 
   async function showTheme(theme, period, orgId) {
-    const resolvedOrgId = orgId || "grid.4991.5";
     const modal = document.getElementById("theme-modal");
     modal.style.display = "block";
     document.getElementById("theme-title").innerText = `Theme: ${theme}`;
 
     const [globalAgg, imperialAgg, topGlobal] = await Promise.all([
       getGlobalCounts(theme, period),
-      getImperialCounts(theme, period, resolvedOrgId),
+      getImperialCounts(theme, period, orgId),
       getTopPapers(theme, period, [], 5)
     ]);
 
-    const years = [...new Set([...globalAgg, ...imperialAgg].map(d => d.year))]
-      .sort((a, b) => a - b);
+    const years = [...new Set(globalAgg.map(d=>d.year))].sort();
     const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
     const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
 
