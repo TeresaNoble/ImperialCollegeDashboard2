@@ -60,7 +60,7 @@ def _http_post(url: str, payload: Any = None, *, headers: Optional[Dict[str, str
         raise RuntimeError(f"Network error contacting {url}: {exc.reason}") from exc
 
 
-def _get_dimensions_token() -> str:
+def _get_dimensions_token(*, http_post=_http_post, time_func=time.time) -> str:
     """Return a cached Dimensions token, refreshing it when expired.
 
     The previous implementation authenticated at import time with a hard-coded
@@ -68,7 +68,9 @@ def _get_dimensions_token() -> str:
     source control. We now read the API key from the ``DIMENSIONS_API_KEY``
     environment variable and lazily authenticate when the proxy endpoint is
     called. Tokens are cached for 50 minutes (Dimensions issues one-hour tokens)
-    to avoid re-authenticating on every request.
+    to avoid re-authenticating on every request. ``http_post`` and
+    ``time_func`` are injectable to keep the helper easy to unit test while
+    defaulting to the production implementations.
     """
 
     api_key = os.environ.get("DIMENSIONS_API_KEY")
@@ -77,11 +79,11 @@ def _get_dimensions_token() -> str:
 
     token = _DIMENSIONS_TOKEN_CACHE.get("token")
     expires_at = float(_DIMENSIONS_TOKEN_CACHE.get("expires_at") or 0.0)
-    if token and time.time() < expires_at:
+    if token and time_func() < expires_at:
         return str(token)
 
     try:
-        response_text = _http_post(DIMENSIONS_AUTH_URL, {"key": api_key}, timeout=10)
+        response_text = http_post(DIMENSIONS_AUTH_URL, {"key": api_key}, timeout=10)
     except DimensionsServiceError as exc:  # pragma: no cover - network behaviour
         raise RuntimeError(
             f"Dimensions authentication failed with status {exc.status}: {exc.body}"
@@ -94,7 +96,7 @@ def _get_dimensions_token() -> str:
         raise RuntimeError("Dimensions authentication response did not include a token.")
 
     _DIMENSIONS_TOKEN_CACHE["token"] = token
-    _DIMENSIONS_TOKEN_CACHE["expires_at"] = time.time() + (50 * 60)  # 50 minutes
+    _DIMENSIONS_TOKEN_CACHE["expires_at"] = time_func() + (50 * 60)  # 50 minutes
     return token
 
 
