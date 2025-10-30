@@ -1,8 +1,10 @@
+import json
 import os
 import time
 from typing import Any, Dict, List, Optional
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
-import requests  # type: ignore
 from flask import Flask, jsonify, request, send_from_directory  # type: ignore
 
 # Create the Flask app FIRST
@@ -12,6 +14,50 @@ app = Flask(__name__)
 DIMENSIONS_AUTH_URL = os.environ.get("DIMENSIONS_AUTH_URL", "https://app.dimensions.ai/api/auth")
 DIMENSIONS_DSL_URL = os.environ.get("DIMENSIONS_DSL_URL", "https://app.dimensions.ai/api/dsl/v2")
 _DIMENSIONS_TOKEN_CACHE: Dict[str, Optional[Any]] = {"token": None, "expires_at": 0.0}
+
+
+class DimensionsServiceError(RuntimeError):
+    """Exception raised when the Dimensions API responds with an HTTP error."""
+
+    def __init__(self, status: int, body: str):
+        super().__init__(f"HTTP {status}: {body}")
+        self.status = status
+        self.body = body
+
+
+def _http_post(url: str, payload: Any = None, *, headers: Optional[Dict[str, str]] = None,
+               timeout: int = 10) -> str:
+    """Minimal HTTP POST helper using urllib to avoid third-party dependencies."""
+
+    data: Optional[bytes]
+    req_headers: Dict[str, str] = {}
+
+    if isinstance(payload, (dict, list)):
+        data = json.dumps(payload).encode("utf-8")
+        req_headers["Content-Type"] = "application/json"
+    elif isinstance(payload, str):
+        data = payload.encode("utf-8")
+    elif payload is None:
+        data = None
+    elif isinstance(payload, (bytes, bytearray)):
+        data = bytes(payload)
+    else:
+        raise TypeError("Unsupported payload type for _http_post")
+
+    if headers:
+        req_headers.update(headers)
+
+    request_obj = urllib_request.Request(url, data=data, headers=req_headers, method="POST")
+
+    try:
+        with urllib_request.urlopen(request_obj, timeout=timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, "replace")
+    except urllib_error.HTTPError as exc:
+        body = exc.read().decode(exc.headers.get_content_charset() or "utf-8", "replace")
+        raise DimensionsServiceError(exc.code, body) from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(f"Network error contacting {url}: {exc.reason}") from exc
 
 
 def _get_dimensions_token() -> str:
@@ -34,9 +80,16 @@ def _get_dimensions_token() -> str:
     if token and time.time() < expires_at:
         return str(token)
 
-    response = requests.post(DIMENSIONS_AUTH_URL, json={"key": api_key}, timeout=10)
-    response.raise_for_status()
-    token = response.json().get("token")
+    try:
+        response_text = _http_post(DIMENSIONS_AUTH_URL, {"key": api_key}, timeout=10)
+    except DimensionsServiceError as exc:  # pragma: no cover - network behaviour
+        raise RuntimeError(
+            f"Dimensions authentication failed with status {exc.status}: {exc.body}"
+        ) from exc
+    try:
+        token = json.loads(response_text).get("token")
+    except json.JSONDecodeError as exc:  # pragma: no cover - invalid upstream response
+        raise RuntimeError("Dimensions authentication returned invalid JSON.") from exc
     if not token:
         raise RuntimeError("Dimensions authentication response did not include a token.")
 
@@ -148,34 +201,35 @@ def dimensions_proxy():
             "details": str(exc)
         }), 500
 
-    headers = {
-        "Authorization": f"JWT {token}",
-        "Content-Type": "application/json"
-    }
-
     try:
-        res = requests.post(
+        response_text = _http_post(
             DIMENSIONS_DSL_URL,
-            data=query.encode("utf-8"),
-            headers=headers,
+            query,
+            headers={
+                "Authorization": f"JWT {token}",
+                "Content-Type": "application/json"
+            },
             timeout=30
         )
-        res.raise_for_status()
-    except requests.RequestException as exc:  # pragma: no cover - network behaviour
-        status = getattr(exc.response, "status_code", 502)
-        details = getattr(exc.response, "text", str(exc))
+    except DimensionsServiceError as exc:  # pragma: no cover - network behaviour
         return jsonify({
             "error": "Dimensions DSL request failed.",
-            "details": details
-        }), status
+            "details": exc.body
+        }), exc.status
+    except RuntimeError as exc:  # pragma: no cover - network behaviour
+        return jsonify({
+            "error": "Dimensions DSL request failed.",
+            "details": str(exc)
+        }), 502
 
     try:
-        return jsonify(res.json())
-    except ValueError:
+        payload = json.loads(response_text)
+    except json.JSONDecodeError:
         return jsonify({
-            "error": "Invalid JSON response from Dimensions",
-            "status": res.status_code
-        }), res.status_code
+            "error": "Invalid JSON response from Dimensions"
+        }), 502
+
+    return jsonify(payload)
 
 
 @app.route("/api/opportunity-predictions", methods=["POST"])
