@@ -94,6 +94,11 @@ document.addEventListener("DOMContentLoaded", () => {
     return (v !== null && v !== undefined && v !== "NaN") ? v : fallback;
   }
 
+  function buildWhereClause(filters = []) {
+    const clauses = filters.filter(Boolean);
+    return clauses.length ? ` where ${clauses.join(" and ")}` : "";
+  }
+
   async function callDSL(q) {
     try {
       const r = await fetch("/api/dimensions", {
@@ -127,11 +132,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // --- Client-side aggregation of publications per year ---
   async function getGlobalCounts(term, period) {
     const year = new Date().getFullYear();
-    let filter = "";
-    if (period === "1") filter = `where year >= ${year - 1}`;
-    if (period === "5") filter = `where year >= ${year - 5}`;
+    const filters = [];
+    if (period === "1") filters.push(`year >= ${year - 1}`);
+    if (period === "5") filters.push(`year >= ${year - 5}`);
     const query = `
-      search publications for "${term}" ${filter}
+      search publications for "${term}"${buildWhereClause(filters)}
       return publications[year] limit 1000
     `;
     const r = await callDSL(query);
@@ -142,20 +147,20 @@ document.addEventListener("DOMContentLoaded", () => {
     return Object.entries(counts).map(([y,c]) => ({year: +y, count:c})).sort((a,b)=>a.year-b.year);
   }
 
-async function getImperialCounts(term, period) {
+async function getImperialCounts(term, period, orgIdOverride = null) {
   const year = new Date().getFullYear();
-  let filter = "";
-  if (period === "1") filter = `where year >= ${year - 1}`;
-  if (period === "5") filter = `where year >= ${year - 5}`;
+  const filters = [];
+  if (period === "1") filters.push(`year >= ${year - 1}`);
+  if (period === "5") filters.push(`year >= ${year - 5}`);
 
   // Use known Imperial identifiers
-  const orgId = "grid.4991.5"; // Imperial College London GRID ID
+  const orgId = orgIdOverride || "grid.4991.5"; // Imperial College London GRID ID
   const orgName = "Imperial College London";
 
-  // Try both id and name filters in one query
+  filters.push(`(research_orgs.id = "${orgId}" or research_orgs.name = "${orgName}")`);
+
   const query = `
-    search publications for "${term}" ${filter} 
-    where research_orgs.id = "${orgId}" or research_orgs.name = "${orgName}"
+    search publications for "${term}"${buildWhereClause(filters)}
     return publications[year] limit 1000
   `;
   const r = await callDSL(query);
@@ -172,13 +177,20 @@ async function getImperialCounts(term, period) {
 
 
   // --- Top papers ---
-  async function getTopPapers(term, period, orgFilter="", limit=5) {
+  async function getTopPapers(term, period, orgFilters = [], limit = 5) {
     const year = new Date().getFullYear();
-    let filter = "";
-    if (period === "1") filter = `where year >= ${year - 1}`;
-    if (period === "5") filter = `where year >= ${year - 5}`;
+    const filters = [];
+    if (period === "1") filters.push(`year >= ${year - 1}`);
+    if (period === "5") filters.push(`year >= ${year - 5}`);
+
+    if (!Array.isArray(orgFilters)) {
+      if (orgFilters) filters.push(orgFilters);
+    } else {
+      filters.push(...orgFilters.filter(Boolean));
+    }
+
     const query = `
-      search publications for "${term}" ${filter} ${orgFilter}
+      search publications for "${term}"${buildWhereClause(filters)}
       return publications[title + year + times_cited + altmetric + authors + research_orgs + linkout]
       sort by times_cited limit ${limit}
     `;
@@ -196,11 +208,12 @@ async function getImperialCounts(term, period) {
     document.body.insertAdjacentHTML("beforeend","<p id='loading'>Loading data from Dimensions...</p>");
 
     const orgId = await getImperialId();
+    const imperialOrgFilter = `(research_orgs.id = "${orgId}" or research_orgs.name = "Imperial College London")`;
     const [globalAgg, imperialAgg, topGlobal, topImperial] = await Promise.all([
       getGlobalCounts(term, period),
       getImperialCounts(term, period, orgId),
-      getTopPapers(term, period, "", 5),
-      getTopPapers(term, period, `where research_orgs.id = "${orgId}"`, 5)
+      getTopPapers(term, period, [], 5),
+      getTopPapers(term, period, [imperialOrgFilter], 5)
     ]);
 
     document.getElementById("loading").remove();
@@ -275,7 +288,7 @@ document.getElementById("imperial-themes").innerText = topKeywords || "Various";
     const [globalAgg, imperialAgg, topGlobal] = await Promise.all([
       getGlobalCounts(theme, period),
       getImperialCounts(theme, period, orgId),
-      getTopPapers(theme, period, "", 5)
+      getTopPapers(theme, period, [], 5)
     ]);
 
     const years = [...new Set(globalAgg.map(d=>d.year))].sort();
