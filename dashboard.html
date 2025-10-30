@@ -505,11 +505,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // --- Client-side aggregation of publications per year ---
-  async function getGlobalCounts(term, period) {
+  async function getGlobalCounts(term, period, conceptId = null) {
     const year = new Date().getFullYear();
     const filters = [];
     if (period === "1") filters.push(`year >= ${year - 1}`);
     if (period === "5") filters.push(`year >= ${year - 5}`);
+    if (conceptId) filters.push(`concepts.id = "${conceptId}"`);
     const query = `
       search publications for "${term}"${buildWhereClause(filters)}
       return publications[year] limit 1000
@@ -522,7 +523,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return Object.entries(counts).map(([y,c]) => ({year: +y, count:c})).sort((a,b)=>a.year-b.year);
   }
 
-async function getImperialCounts(term, period, orgIdOverride = null) {
+async function getImperialCounts(term, period, orgIdOverride = null, conceptId = null) {
   const year = new Date().getFullYear();
   const filters = [];
   if (period === "1") filters.push(`year >= ${year - 1}`);
@@ -533,6 +534,7 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
   const orgName = "Imperial College London";
 
   filters.push(`(research_orgs.id = "${orgId}" or research_orgs.name = "${orgName}")`);
+  if (conceptId) filters.push(`concepts.id = "${conceptId}"`);
 
   const query = `
     search publications for "${term}"${buildWhereClause(filters)}
@@ -552,7 +554,7 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
 
 
   // --- Top papers ---
-  async function getTopPapers(term, period, orgFilters = [], limit = 5) {
+  async function getTopPapers(term, period, orgFilters = [], limit = 5, conceptId = null) {
     const year = new Date().getFullYear();
     const filters = [];
     if (period === "1") filters.push(`year >= ${year - 1}`);
