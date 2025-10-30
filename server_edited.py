@@ -274,7 +274,7 @@ if __name__ == "__main__":
     # prevents the default Flask port 5000 from being used unexpectedly.
     host = os.environ.get("HOST", "127.0.0.1")
     # Respect FLASK_RUN_PORT (used by flask CLI) or PORT (common in containers).
-    # Default to 8000 here to avoid colliding with an already-used 5000.
+    # Default to 7000 here to avoid colliding with an already-used 5000.
     port = int(os.environ.get("FLASK_RUN_PORT") or os.environ.get("PORT") or 8000)
     debug = os.environ.get("FLASK_DEBUG", "1").lower() not in ("0", "false", "no")
     app.run(host=host, port=port, debug=debug)
