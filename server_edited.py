@@ -1,41 +1,214 @@
-from flask import Flask, request, jsonify, send_from_directory # type: ignore
-import requests, os # type: ignore
+import os
+import time
+from typing import Any, Dict, List, Optional
+
+import requests  # type: ignore
+from flask import Flask, jsonify, request, send_from_directory  # type: ignore
 
 # Create the Flask app FIRST
 app = Flask(__name__)
 
-# ✅ Add your Dimensions API key (JWT token) here
-DIMENSIONS_API_KEY = "D5D472D56E434D8F93D17B18448424C3"  # replace with your real JWT
 
-login = {
-    'key': DIMENSIONS_API_KEY
-}
-resp = requests.post('https://app.dimensions.ai/api/auth', json=login)
-resp.raise_for_status()
+DIMENSIONS_AUTH_URL = os.environ.get("DIMENSIONS_AUTH_URL", "https://app.dimensions.ai/api/auth")
+DIMENSIONS_DSL_URL = os.environ.get("DIMENSIONS_DSL_URL", "https://app.dimensions.ai/api/dsl/v2")
+_DIMENSIONS_TOKEN_CACHE: Dict[str, Optional[Any]] = {"token": None, "expires_at": 0.0}
+
+
+def _get_dimensions_token() -> str:
+    """Return a cached Dimensions token, refreshing it when expired.
+
+    The previous implementation authenticated at import time with a hard-coded
+    key, which is brittle for deployments and also risked committing secrets to
+    source control. We now read the API key from the ``DIMENSIONS_API_KEY``
+    environment variable and lazily authenticate when the proxy endpoint is
+    called. Tokens are cached for 50 minutes (Dimensions issues one-hour tokens)
+    to avoid re-authenticating on every request.
+    """
+
+    api_key = os.environ.get("DIMENSIONS_API_KEY")
+    if not api_key:
+        raise RuntimeError("Dimensions API key is not configured. Set DIMENSIONS_API_KEY.")
+
+    token = _DIMENSIONS_TOKEN_CACHE.get("token")
+    expires_at = float(_DIMENSIONS_TOKEN_CACHE.get("expires_at") or 0.0)
+    if token and time.time() < expires_at:
+        return str(token)
+
+    response = requests.post(DIMENSIONS_AUTH_URL, json={"key": api_key}, timeout=10)
+    response.raise_for_status()
+    token = response.json().get("token")
+    if not token:
+        raise RuntimeError("Dimensions authentication response did not include a token.")
+
+    _DIMENSIONS_TOKEN_CACHE["token"] = token
+    _DIMENSIONS_TOKEN_CACHE["expires_at"] = time.time() + (50 * 60)  # 50 minutes
+    return token
+
+
+def _generate_mock_predictions(term: str, period: str) -> Dict[str, Any]:
+    """Return deterministic mock predictions for opportunity scouting.
+
+    This keeps the dashboard functional while the production AI service is
+    being finalised. To wire up the real model once available, replace the
+    body of this helper with an HTTPS request to the Imperial-hosted service
+    (for example, using ``requests.post`` against the API Gateway URL) and
+    forward the authentication headers required by ICT. Keep the return
+    structure identical so the front-end continues to work unchanged.
+    """
+
+    base_confidence = 0.82
+    period_hint = {
+        "all": "Stable funding outlook",
+        "1": "Emerging call volume",
+        "5": "Sustained growth trajectory"
+    }.get(period, "Mixed opportunity signals")
+
+    challenges: List[Dict[str, Any]] = [
+        {
+            "rank": 1,
+            "challenge": f"Transdisciplinary {term} demonstrator programme",
+            "confidence": round(base_confidence + 0.08, 2),
+            "supporting_metrics": {
+                "publication_gap": "Imperial publications down 15% vs. global peers",
+                "funding_trend": f"{period_hint} (+11% YoY awards)",
+                "policy_momentum": "Highlighted in UKRI 2030 roadmap"
+            },
+            "recommended_collaborators": [
+                {
+                    "name": "Centre for Climate Finance",
+                    "profile_url": "https://www.imperial.ac.uk/climate-finance"
+                },
+                {
+                    "name": "Institute for Security Science and Technology",
+                    "profile_url": "https://www.imperial.ac.uk/isst"
+                }
+            ]
+        },
+        {
+            "rank": 2,
+            "challenge": f"Industry partnership on scalable {term} analytics",
+            "confidence": round(base_confidence, 2),
+            "supporting_metrics": {
+                "publication_gap": "High citation growth but limited UK leads",
+                "funding_trend": "£24m pipeline identified across Innovate UK",
+                "talent_indicator": "42 active Imperial PIs in adjacent areas"
+            },
+            "recommended_collaborators": [
+                {
+                    "name": "Data Science Institute",
+                    "profile_url": "https://www.imperial.ac.uk/data-science"
+                },
+                {
+                    "name": "Corporate Partnerships Team",
+                    "profile_url": "https://www.imperial.ac.uk/enterprise/partners"
+                }
+            ]
+        },
+        {
+            "rank": 3,
+            "challenge": f"Pan-European {term} resilience consortium",
+            "confidence": round(base_confidence - 0.05, 2),
+            "supporting_metrics": {
+                "publication_gap": "EU programmes request UK leadership",
+                "funding_trend": "€18m Horizon Europe calls opening Q4",
+                "collaboration_index": "Imperial co-authorship network density at 0.61"
+            },
+            "recommended_collaborators": [
+                {
+                    "name": "Grantham Institute",
+                    "profile_url": "https://www.imperial.ac.uk/grantham"
+                },
+                {
+                    "name": "Imperial Enterprise Lab",
+                    "profile_url": "https://www.imperial.ac.uk/enterpriselab"
+                }
+            ]
+        }
+    ]
+
+    return {
+        "term": term,
+        "period": period,
+        "predictions": challenges
+    }
+
 
 @app.route("/api/dimensions", methods=["POST"])
 def dimensions_proxy():
-    query = request.json.get("query", "")
-    print(f"query here: {query}")
+    payload = request.get_json(force=True) or {}
+    query = (payload.get("query") or "").strip()
+    if not query:
+        return jsonify({"error": "Missing DSL query payload."}), 400
+
+    try:
+        token = _get_dimensions_token()
+    except Exception as exc:  # pragma: no cover - surfaced via JSON response
+        return jsonify({
+            "error": "Unable to authenticate with Dimensions.",
+            "details": str(exc)
+        }), 500
+
     headers = {
-        'Authorization': f"JWT {resp.json()['token']}",
+        "Authorization": f"JWT {token}",
         "Content-Type": "application/json"
     }
 
-    res = requests.post(
-    'https://app.dimensions.ai/api/dsl/v2', # This is the current major endpoint
-    # "https://app.dimensions.ai/api/dsl.json",
-    data = query.encode(),
-    headers=headers)
-    
-    print("🔍 Dimensions API status:", res.status_code)
-    print("🔍 Response text:", res.text)  # for debugging
+    try:
+        res = requests.post(
+            DIMENSIONS_DSL_URL,
+            data=query.encode("utf-8"),
+            headers=headers,
+            timeout=30
+        )
+        res.raise_for_status()
+    except requests.RequestException as exc:  # pragma: no cover - network behaviour
+        status = getattr(exc.response, "status_code", 502)
+        details = getattr(exc.response, "text", str(exc))
+        return jsonify({
+            "error": "Dimensions DSL request failed.",
+            "details": details
+        }), status
 
     try:
         return jsonify(res.json())
-    except Exception:
-        return jsonify({"error": "Invalid JSON response from Dimensions",
-                        "status": res.status_code})
+    except ValueError:
+        return jsonify({
+            "error": "Invalid JSON response from Dimensions",
+            "status": res.status_code
+        }), res.status_code
+
+
+@app.route("/api/opportunity-predictions", methods=["POST"])
+def opportunity_predictions():
+    payload = request.get_json(force=True) or {}
+    term = (payload.get("term") or "").strip()
+    period = str(payload.get("period") or "all").strip() or "all"
+
+    if not term:
+        return jsonify({
+            "error": "Missing required field: term"
+        }), 400
+
+    # When the production AI model is ready, replace the call below with a
+    # requests.post call to the Imperial AI microservice, for example:
+    #
+    #   response = requests.post(
+    #       os.environ["AI_SERVICE_URL"],
+    #       json={"term": term, "period": period},
+    #       headers={"Authorization": f"Bearer {token}"},
+    #       timeout=15,
+    #   )
+    #   response.raise_for_status()
+    #   return jsonify(response.json())
+    #
+    # Storing the base URL and credentials (OAuth client secrets, API keys,
+    # etc.) in environment variables keeps the dashboard deployable across
+    # Imperial environments. The front end expects the structure returned by
+    # ``_generate_mock_predictions`` so the live service should mirror it.
+    mock_payload = _generate_mock_predictions(term, period)
+    return jsonify(mock_payload)
+
+
 @app.route('/')
 def serve_dashboard():
     return send_from_directory(os.getcwd(), 'dashboard.html')

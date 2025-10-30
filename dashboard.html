@@ -22,6 +22,14 @@
                    background:white; border:1px solid #ccc; overflow:auto; padding:20px; z-index:1000; }
     #theme-modal h2 { margin-top:0; }
     #close-modal { float:right; cursor:pointer; color:red; font-weight:bold; }
+    .status-message { color: #555; font-style: italic; }
+    .error-message { color: #b30000; font-weight: 600; }
+    .opportunity-list { padding-left: 20px; }
+    .opportunity-list li { margin-bottom: 12px; }
+    .opportunity-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .opportunity-header strong { color: #003366; }
+    .confidence-chip { background: #e0f0ff; color: #004080; border-radius: 12px; padding: 2px 10px; font-size: 0.85rem; }
+    .opportunity-metrics, .opportunity-collaborators { margin: 6px 0 0 0; padding-left: 16px; }
   </style>
 </head>
 <body>
@@ -74,7 +82,7 @@
 
     <div class="card">
       <h2>🚀 Opportunities for Imperial</h2>
-      <p id="imperial-opportunities" class="narrative"></p>
+      <div id="imperial-opportunities" class="narrative status-message">Run a search to see AI-generated opportunity signals.</div>
     </div>
   </div>
 
@@ -204,87 +212,171 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
     const period = document.getElementById("period-select").value;
     if (!term) return alert("Enter a keyword first.");
 
-    document.getElementById("dashboard-content").style.display = "none";
-    document.body.insertAdjacentHTML("beforeend","<p id='loading'>Loading data from Dimensions...</p>");
+    const dashboardContent = document.getElementById("dashboard-content");
+    dashboardContent.style.display = "none";
 
-    const orgId = await getImperialId();
-    const imperialOrgFilter = `(research_orgs.id = "${orgId}" or research_orgs.name = "Imperial College London")`;
-    const [globalAgg, imperialAgg, topGlobal, topImperial] = await Promise.all([
-      getGlobalCounts(term, period),
-      getImperialCounts(term, period, orgId),
-      getTopPapers(term, period, [], 5),
-      getTopPapers(term, period, [imperialOrgFilter], 5)
-    ]);
+    const existingLoading = document.getElementById("loading");
+    if (existingLoading) existingLoading.remove();
+    document.body.insertAdjacentHTML("beforeend", "<p id='loading'>Loading data from Dimensions...</p>");
 
-    document.getElementById("loading").remove();
-    document.getElementById("dashboard-content").style.display = "block";
+    const opportunitiesContainer = document.getElementById("imperial-opportunities");
+    const resetOpportunityCard = (message, asStatus = true) => {
+      opportunitiesContainer.classList.toggle("status-message", Boolean(asStatus));
+      opportunitiesContainer.classList.toggle("error-message", !asStatus);
+      opportunitiesContainer.innerHTML = message;
+    };
+    resetOpportunityCard("Analysing opportunity signals...", true);
 
-    const years = [...new Set([...globalAgg, ...imperialAgg].map(d => d.year))]
-      .sort((a, b) => a - b);
-    const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
-    const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
+    const removeLoadingIndicator = () => {
+      const loadingEl = document.getElementById("loading");
+      if (loadingEl) loadingEl.remove();
+    };
 
-    const totalGlobal = d3.sum(gCounts);
-    const totalImperial = d3.sum(iCounts);
-    const pct = totalGlobal ? ((totalImperial/totalGlobal)*100).toFixed(1) : 0;
+    try {
+      const orgId = await getImperialId();
+      const imperialOrgFilter = `(research_orgs.id = "${orgId}" or research_orgs.name = "Imperial College London")`;
+      const [globalAgg, imperialAgg, topGlobal, topImperial] = await Promise.all([
+        getGlobalCounts(term, period),
+        getImperialCounts(term, period, orgId),
+        getTopPapers(term, period, [], 5),
+        getTopPapers(term, period, [imperialOrgFilter], 5)
+      ]);
 
-    document.getElementById("global-count").innerText = `${totalGlobal} publications`;
-    document.getElementById("imperial-count").innerText = `${totalImperial} publications (${pct}% of global)`;
+      try {
+        const aiResponse = await fetch("/api/opportunity-predictions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ term, period })
+        });
 
-    if (window.mainTrendChart) {
-      window.mainTrendChart.destroy();
-    }
-    const combinedCtx = document.getElementById('combinedChart').getContext('2d');
-    window.mainTrendChart = new Chart(combinedCtx, {
-      type: 'line',
-      data: {
-        labels: years,
-        datasets: [
-          { label: 'Global Publications', data: gCounts, borderColor: 'blue', fill: false },
-          { label: 'Imperial Publications', data: iCounts, borderColor: 'green', fill: false }
-        ]
-      },
-      options: { responsive: true, scales: { y: { beginAtZero: true } } }
-    });
+        if (!aiResponse.ok) {
+          const err = await aiResponse.json().catch(() => ({}));
+          throw new Error(err.error || `Prediction service returned ${aiResponse.status}`);
+        }
 
-    document.getElementById("trend-narrative").innerText =
-      `Imperial’s publication activity compared to global research on "${term}".`;
-    const keywordSet = new Set();
-    [...topGlobal, ...topImperial].forEach(p => {
-      if (p.title) {
-        p.title.toLowerCase().split(/\W+/).forEach(w => {
-          if (w.length > 5) keywordSet.add(w);
+        const aiData = await aiResponse.json();
+        const predictions = Array.isArray(aiData) ? aiData : (aiData.predictions || []);
+        renderOpportunityPredictions(predictions);
+      } catch (e) {
+        console.error("⚠️ Prediction call failed", e);
+        const fallback = (e && e.message) ? e.message : "Please try again later.";
+        resetOpportunityCard(`Unable to load AI opportunity recommendations: ${fallback}`, false);
+      }
+
+      removeLoadingIndicator();
+      dashboardContent.style.display = "block";
+
+      const years = [...new Set([...globalAgg, ...imperialAgg].map(d => d.year))]
+        .sort((a, b) => a - b);
+      const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
+      const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
+
+      const totalGlobal = d3.sum(gCounts);
+      const totalImperial = d3.sum(iCounts);
+      const pct = totalGlobal ? ((totalImperial/totalGlobal)*100).toFixed(1) : 0;
+
+      document.getElementById("global-count").innerText = `${totalGlobal} publications`;
+      document.getElementById("imperial-count").innerText = `${totalImperial} publications (${pct}% of global)`;
+
+      if (window.mainTrendChart) {
+        window.mainTrendChart.destroy();
+      }
+      const combinedCtx = document.getElementById('combinedChart').getContext('2d');
+      window.mainTrendChart = new Chart(combinedCtx, {
+        type: 'line',
+        data: {
+          labels: years,
+          datasets: [
+            { label: 'Global Publications', data: gCounts, borderColor: 'blue', fill: false },
+            { label: 'Imperial Publications', data: iCounts, borderColor: 'green', fill: false }
+          ]
+        },
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+      });
+
+      document.getElementById("trend-narrative").innerText =
+        `Imperial’s publication activity compared to global research on "${term}".`;
+      const keywordSet = new Set();
+      [...topGlobal, ...topImperial].forEach(p => {
+        if (p.title) {
+          p.title.toLowerCase().split(/\W+/).forEach(w => {
+            if (w.length > 5) keywordSet.add(w);
+          });
+        }
+      });
+      const topics = Array.from(keywordSet).slice(0, 6);
+      const topKeywords = topics.join(", ");
+      document.getElementById("global-topics").innerText = topKeywords || "Various";
+      document.getElementById("imperial-themes").innerText = topKeywords || "Various";
+
+
+      function render(divId, papers) {
+        const div = document.querySelector(divId);
+        div.innerHTML = "";
+        papers.forEach(p => {
+          const authors = (p.authors||[]).map(a => a.first_name?`${a.first_name} ${a.last_name}`:a).join(", ");
+          div.innerHTML += `<p><b>${safeValue(p.title)}</b><br>
+            Year: ${safeValue(p.year)} | Citations: ${safeValue(p.times_cited,0)} | Altmetric: ${safeValue(p.altmetric,0)}<br>
+            <em>Authors:</em> ${safeValue(authors)}<br>
+            <a href="${safeValue(p.linkout,'#')}" target="_blank">View in Dimensions</a></p>`;
         });
       }
-    });
-    const topics = Array.from(keywordSet).slice(0, 6);
-    const topKeywords = topics.join(", ");
-    document.getElementById("global-topics").innerText = topKeywords || "Various";
-    document.getElementById("imperial-themes").innerText = topKeywords || "Various";
+      render("#top-papers-global", topGlobal);
+      render("#top-papers-imperial", topImperial);
 
-
-    function render(divId, papers) {
-      const div = document.querySelector(divId);
-      div.innerHTML = "";
-      papers.forEach(p => {
-        const authors = (p.authors||[]).map(a => a.first_name?`${a.first_name} ${a.last_name}`:a).join(", ");
-        div.innerHTML += `<p><b>${safeValue(p.title)}</b><br>
-          Year: ${safeValue(p.year)} | Citations: ${safeValue(p.times_cited,0)} | Altmetric: ${safeValue(p.altmetric,0)}<br>
-          <em>Authors:</em> ${safeValue(authors)}<br>
-          <a href="${safeValue(p.linkout,'#')}" target="_blank">View in Dimensions</a></p>`;
-      });
+      const themeDiv = d3.select("#theme-tags");
+      themeDiv.html("");
+      topics.forEach(t => themeDiv.append("span").attr("class","tag").text(t)
+        .on("click", ()=> showTheme(t, period, orgId)));
+    } catch (error) {
+      console.error("⚠️ Dashboard refresh failed", error);
+      removeLoadingIndicator();
+      resetOpportunityCard("Unable to load dashboard data. Please try again.", false);
     }
-    render("#top-papers-global", topGlobal);
-    render("#top-papers-imperial", topImperial);
-
-    document.getElementById("imperial-opportunities").innerText =
-      `Imperial shows strong output but could expand collaboration on related ${term} research topics.`;
-
-    const themeDiv = d3.select("#theme-tags");
-    themeDiv.html("");
-    topics.forEach(t => themeDiv.append("span").attr("class","tag").text(t)
-      .on("click", ()=> showTheme(t, period, resolvedOrgId)));
   };
+
+  function renderOpportunityPredictions(predictions) {
+    const container = document.getElementById("imperial-opportunities");
+    container.classList.remove("error-message");
+
+    if (!predictions.length) {
+      container.classList.add("status-message");
+      container.innerHTML = "No AI recommendations were returned for this query yet.";
+      return;
+    }
+
+    container.classList.remove("status-message");
+    const listItems = predictions
+      .sort((a, b) => (a.rank || 0) - (b.rank || 0))
+      .map(prediction => {
+        const confidence = Math.round((prediction.confidence || 0) * 100);
+        const metrics = Object.entries(prediction.supporting_metrics || {})
+          .map(([label, value]) => `<li><strong>${label.replace(/_/g, ' ')}:</strong> ${safeValue(value)}</li>`)
+          .join("");
+
+        const collaborators = (prediction.recommended_collaborators || [])
+          .map(collab => {
+            const name = safeValue(collab.name);
+            const url = safeValue(collab.profile_url, "#");
+            return `<li><a href="${url}" target="_blank" rel="noopener">${name}</a></li>`;
+          })
+          .join("");
+
+        return `
+          <li>
+            <div class="opportunity-header">
+              <strong>#${safeValue(prediction.rank)} · ${safeValue(prediction.challenge)}</strong>
+              <span class="confidence-chip">Confidence: ${confidence}%</span>
+            </div>
+            ${metrics ? `<ul class="opportunity-metrics">${metrics}</ul>` : ""}
+            ${collaborators ? `<div><em>Recommended collaborators</em><ul class="opportunity-collaborators">${collaborators}</ul></div>` : ""}
+          </li>
+        `;
+      })
+      .join("");
+
+    container.innerHTML = `<ol class="opportunity-list">${listItems}</ol>`;
+  }
 
   async function showTheme(theme, period, orgId) {
     const modal = document.getElementById("theme-modal");
