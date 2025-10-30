@@ -94,6 +94,68 @@ document.addEventListener("DOMContentLoaded", () => {
     return (v !== null && v !== undefined && v !== "NaN") ? v : fallback;
   }
 
+  const conceptConvergenceLookup = new Map([
+    ["C2779951507", { theme: "Climate & Environment", description: "Climate resilience, sustainability and environmental stewardship" }],
+    ["C2886692312", { theme: "Health & Medicine", description: "Translational health innovation and public health impact" }],
+    ["C2799971186", { theme: "AI, Data & Digital", description: "Advanced analytics, automation and data-driven innovation" }],
+    ["C2793553830", { theme: "Future of Industry", description: "Next-generation materials, manufacturing and energy systems" }],
+    ["C2965165064", { theme: "Society & Policy", description: "Inclusive innovation, governance and social impact" }],
+    // Fallback entries matched by normalized concept labels
+    ["climate change", { theme: "Climate & Environment", description: "Climate resilience, sustainability and environmental stewardship" }],
+    ["public health", { theme: "Health & Medicine", description: "Translational health innovation and public health impact" }],
+    ["artificial intelligence", { theme: "AI, Data & Digital", description: "Advanced analytics, automation and data-driven innovation" }],
+    ["energy transition", { theme: "Future of Industry", description: "Next-generation materials, manufacturing and energy systems" }],
+    ["social innovation", { theme: "Society & Policy", description: "Inclusive innovation, governance and social impact" }]
+  ]);
+
+  function resolveConvergenceTheme(concept) {
+    if (!concept) return null;
+    const normalized = (concept.label || "").toLowerCase();
+    return conceptConvergenceLookup.get(concept.id) ||
+           conceptConvergenceLookup.get(normalized) || null;
+  }
+
+  function collectConceptThemes(papers, { max = 8, minRelevance = 0.2 } = {}) {
+    const conceptStats = new Map();
+
+    papers.forEach(paper => {
+      const seenForPaper = new Set();
+      const concepts = [];
+      if (Array.isArray(paper.concepts)) concepts.push(...paper.concepts);
+      if (Array.isArray(paper.fields_of_study)) concepts.push(...paper.fields_of_study);
+
+      concepts.forEach(concept => {
+        if (!concept) return;
+        const label = concept.name || concept.display_name || concept.label || concept.title;
+        if (!label) return;
+        const key = concept.id || label.toLowerCase();
+        if (!key || seenForPaper.has(key)) return;
+        seenForPaper.add(key);
+
+        const relevanceCandidate = typeof concept.relevance === "number" ? concept.relevance : concept.score;
+        const relevance = (typeof relevanceCandidate === "number" && !Number.isNaN(relevanceCandidate)) ? Math.max(relevanceCandidate, 0) : 1;
+        if (relevance === 0) return;
+
+        const entry = conceptStats.get(key) || { id: concept.id || key, label, totalRelevance: 0, count: 0 };
+        entry.totalRelevance += relevance;
+        entry.count += 1;
+        entry.label = label;
+        conceptStats.set(key, entry);
+      });
+    });
+
+    const enriched = Array.from(conceptStats.values()).map(stat => ({
+      ...stat,
+      averageRelevance: stat.count ? stat.totalRelevance / stat.count : 0
+    }));
+
+    const filtered = enriched.filter(stat => stat.averageRelevance >= minRelevance);
+    const candidates = (filtered.length ? filtered : enriched)
+      .sort((a, b) => (b.totalRelevance || 0) - (a.totalRelevance || 0));
+
+    return candidates.slice(0, max);
+  }
+
   function buildWhereClause(filters = []) {
     const clauses = filters.filter(Boolean);
     return clauses.length ? ` where ${clauses.join(" and ")}` : "";
@@ -130,11 +192,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // --- Client-side aggregation of publications per year ---
-  async function getGlobalCounts(term, period) {
+  async function getGlobalCounts(term, period, conceptId = null) {
     const year = new Date().getFullYear();
     const filters = [];
     if (period === "1") filters.push(`year >= ${year - 1}`);
     if (period === "5") filters.push(`year >= ${year - 5}`);
+    if (conceptId) filters.push(`concepts.id = "${conceptId}"`);
     const query = `
       search publications for "${term}"${buildWhereClause(filters)}
       return publications[year] limit 1000
@@ -147,7 +210,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return Object.entries(counts).map(([y,c]) => ({year: +y, count:c})).sort((a,b)=>a.year-b.year);
   }
 
-async function getImperialCounts(term, period, orgIdOverride = null) {
+async function getImperialCounts(term, period, orgIdOverride = null, conceptId = null) {
   const year = new Date().getFullYear();
   const filters = [];
   if (period === "1") filters.push(`year >= ${year - 1}`);
@@ -158,6 +221,7 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
   const orgName = "Imperial College London";
 
   filters.push(`(research_orgs.id = "${orgId}" or research_orgs.name = "${orgName}")`);
+  if (conceptId) filters.push(`concepts.id = "${conceptId}"`);
 
   const query = `
     search publications for "${term}"${buildWhereClause(filters)}
@@ -177,7 +241,7 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
 
 
   // --- Top papers ---
-  async function getTopPapers(term, period, orgFilters = [], limit = 5) {
+  async function getTopPapers(term, period, orgFilters = [], limit = 5, conceptId = null) {
     const year = new Date().getFullYear();
     const filters = [];
     if (period === "1") filters.push(`year >= ${year - 1}`);
@@ -188,10 +252,11 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
     } else {
       filters.push(...orgFilters.filter(Boolean));
     }
+    if (conceptId) filters.push(`concepts.id = "${conceptId}"`);
 
     const query = `
       search publications for "${term}"${buildWhereClause(filters)}
-      return publications[title + year + times_cited + altmetric + authors + research_orgs + linkout]
+      return publications[title + year + times_cited + altmetric + authors + research_orgs + linkout + concepts + fields_of_study]
       sort by times_cited limit ${limit}
     `;
     const r = await callDSL(query);
@@ -249,18 +314,11 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
 
     document.getElementById("trend-narrative").innerText =
       `Imperial’s publication activity compared to global research on "${term}".`;
-    const keywordSet = new Set();
-    [...topGlobal, ...topImperial].forEach(p => {
-      if (p.title) {
-        p.title.toLowerCase().split(/\W+/).forEach(w => {
-          if (w.length > 5) keywordSet.add(w);
-        });
-      }
-    });
-    const topics = Array.from(keywordSet).slice(0, 6);
-    const topKeywords = topics.join(", ");
-    document.getElementById("global-topics").innerText = topKeywords || "Various";
-    document.getElementById("imperial-themes").innerText = topKeywords || "Various";
+    const conceptThemes = collectConceptThemes([...topGlobal, ...topImperial]);
+    const topConceptLabels = conceptThemes.map(c => c.label);
+    const combinedConceptText = topConceptLabels.join(", ");
+    document.getElementById("global-topics").innerText = combinedConceptText || "Various";
+    document.getElementById("imperial-themes").innerText = combinedConceptText || "Various";
 
 
     function render(divId, papers) {
@@ -282,27 +340,43 @@ async function getImperialCounts(term, period, orgIdOverride = null) {
 
     const themeDiv = d3.select("#theme-tags");
     themeDiv.html("");
-    topics.forEach(t => themeDiv.append("span").attr("class","tag").text(t)
-      .on("click", ()=> showTheme(t, period, resolvedOrgId)));
+    if (conceptThemes.length === 0) {
+      themeDiv.append("span").text("Concept insights unavailable for this search.");
+    } else {
+      conceptThemes.forEach(theme => themeDiv.append("span")
+        .attr("class","tag")
+        .attr("data-concept-id", theme.id)
+        .text(theme.label)
+        .on("click", () => showTheme(theme, period, orgId)));
+    }
   };
 
-  async function showTheme(theme, period, orgId) {
+  async function showTheme(concept, period, orgId) {
     const modal = document.getElementById("theme-modal");
     modal.style.display = "block";
-    document.getElementById("theme-title").innerText = `Theme: ${theme}`;
+    document.getElementById("theme-title").innerText = `Theme: ${concept.label}`;
 
     const [globalAgg, imperialAgg, topGlobal] = await Promise.all([
-      getGlobalCounts(theme, period),
-      getImperialCounts(theme, period, orgId),
-      getTopPapers(theme, period, [], 5)
+      getGlobalCounts(concept.label, period, concept.id),
+      getImperialCounts(concept.label, period, orgId, concept.id),
+      getTopPapers(concept.label, period, [], 5, concept.id)
     ]);
 
     const years = [...new Set(globalAgg.map(d=>d.year))].sort();
     const gCounts = years.map(y => (globalAgg.find(d=>d.year===y)?.count)||0);
     const iCounts = years.map(y => (imperialAgg.find(d=>d.year===y)?.count)||0);
 
-    document.getElementById("theme-summary").innerText =
-      `${d3.sum(gCounts)} global publications on ${theme}, including ${d3.sum(iCounts)} from Imperial.`;
+    const globalTotal = d3.sum(gCounts);
+    const imperialTotal = d3.sum(iCounts);
+    const convergenceDetails = resolveConvergenceTheme(concept);
+    const summaryParts = [
+      `${globalTotal} global publications on ${concept.label} (Dimensions concept ${concept.id}).`,
+      `Imperial contributed ${imperialTotal}.`
+    ];
+    if (convergenceDetails) {
+      summaryParts.push(`Linked Imperial convergence theme: ${convergenceDetails.theme}${convergenceDetails.description ? ` — ${convergenceDetails.description}.` : "."}`);
+    }
+    document.getElementById("theme-summary").innerText = summaryParts.join(" ");
 
     // Destroy old chart if it exists
     if (window.themeTrendChart) {
